@@ -1,0 +1,52 @@
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# NuGet
+packages/
+*.nupkg
+**/[Pp]ackages/*
+!**/[Pp]ackages/build/
+*.nuget.props
+*.nuget.targets
+
+# Visual Studio cache files
+*.ilk
+*.pdb
+*.ipdb
+*.iobj
+*.obj
+*.exe
+*.dll
+*.lib
+*.exp
+*.ncb
+*.log
+*.tlog
+*.pch
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# OS files
+Thumbs.db
+*.DS_Store
