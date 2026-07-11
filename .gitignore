@@ -19,6 +19,8 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+**/bin/
+**/obj/
 
 # NuGet
 packages/
@@ -42,6 +44,15 @@ packages/
 *.log
 *.tlog
 *.pch
+
+# Runtime data and secrets
+**/*.db
+**/*.db-shm
+**/*.db-wal
+*.pfx
+*.p12
+*.key
+appsettings.Production.json
 
 # JetBrains Rider
 .idea/

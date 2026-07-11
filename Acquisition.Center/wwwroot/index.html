@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>设备集中管理平台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main>
+    <section id="dashboard">
+      <header>
+        <div><h1>设备集中管理平台</h1><p id="lastRefresh">正在读取中心状态…</p></div>
+        <div class="actions"><span id="liveState" class="badge">实时连接中</span></div>
+      </header>
+      <div id="summary" class="summary"></div>
+      <section class="card">
+        <div class="toolbar"><h2>Agent 列表</h2><input id="search" placeholder="搜索电脑名或Agent编号"><button id="searchButton">查询</button></div>
+        <div class="table-wrap"><table><thead><tr><th>状态</th><th>电脑</th><th>Agent编号</th><th>站点</th><th>版本</th><th>队列</th><th>最后心跳</th><th>操作</th></tr></thead><tbody id="agentRows"></tbody></table></div>
+        <div id="empty" class="empty" hidden>暂时没有Agent心跳数据。</div>
+      </section>
+      <section class="card config-card">
+        <div class="toolbar"><h2>集中配置</h2><span class="muted">保存后立即同步到选中的全部在线Agent</span></div>
+        <div class="config-grid">
+          <label>配置名称<input id="configName" value="采集配置"></label>
+          <label>最低Agent版本<input id="minimumAgentVersion" value="1.0.0"></label>
+        </div>
+        <label>声明式配置 JSON<textarea id="configPayload" rows="10">{"machines":[]}</textarea></label>
+        <div class="actions config-actions"><button id="syncConfig">保存并同步到全部Agent</button></div>
+        <p id="configMessage" class="error" role="status"></p>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
