@@ -208,6 +208,7 @@
     <Compile Include="Helpers\DateTimeHelper.cs" />
     <Compile Include="Helpers\FileHelper.cs" />
     <Compile Include="Helpers\LogHelper.cs" />
+    <Compile Include="Helpers\RemoteAgentBridge.cs" />
     <Compile Include="Helpers\SettingsHelper.cs" />
     <Compile Include="Models\AppSettings.cs" />
     <Compile Include="Models\DatabaseConfig.cs" />

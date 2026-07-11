@@ -3,8 +3,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using MachineDataAcquisitionSystem.Models;
-using MachineDataAcquisitionSystem.Core.Parser;
-using MachineDataAcquisitionSystem.Models;
 
 namespace MachineDataAcquisitionSystem.Core.Parser
 {

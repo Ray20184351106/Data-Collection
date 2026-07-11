@@ -6,10 +6,6 @@ using System.Threading.Tasks;
 using MachineDataAcquisitionSystem.Core.Parser;
 using MachineDataAcquisitionSystem.Data;
 using MachineDataAcquisitionSystem.Models;
-using MachineDataAcquisitionSystem.Core.Parser;
-using MachineDataAcquisitionSystem.Core;
-using MachineDataAcquisitionSystem.Data;
-using MachineDataAcquisitionSystem.Models;
 
 namespace MachineDataAcquisitionSystem.Core
 {

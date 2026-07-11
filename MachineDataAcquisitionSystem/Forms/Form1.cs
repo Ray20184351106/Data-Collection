@@ -21,6 +21,7 @@ namespace MachineDataAcquisitionSystem
     {
         //配置类
         private List<MachineConfig> _machineConfigs;
+        private RemoteAgentBridge _remoteAgentBridge;
 
         // 队列统计
         private int _queueLength = 0;
@@ -32,6 +33,8 @@ namespace MachineDataAcquisitionSystem
         // 正在处理的文件集合（防止重复处理）内存锁
         private HashSet<string> _processingFiles = new HashSet<string>();
         private object _processingLock = new object();
+        private readonly System.Threading.SemaphoreSlim _globalProcessingLimit = new System.Threading.SemaphoreSlim(4, 4);
+        private readonly ConcurrentDictionary<int, System.Threading.SemaphoreSlim> _deviceProcessingLimits = new ConcurrentDictionary<int, System.Threading.SemaphoreSlim>();
         // 队列数据结构
         private class QueueItem
         {
@@ -135,6 +138,46 @@ namespace MachineDataAcquisitionSystem
             // 添加启动日志
             AddLog("系统启动完成", LogLevel.Success);
 
+            // 与Windows Agent共享状态和安全白名单命令；Agent不可用时不影响本地采集。
+            InitRemoteAgentBridge();
+
+        }
+
+        private void InitRemoteAgentBridge()
+        {
+            _remoteAgentBridge = new RemoteAgentBridge(
+                machineId => { if (machineId.HasValue) StartMachine(machineId.Value); else StartAllMachines(); },
+                machineId => { if (machineId.HasValue) StopMachine(machineId.Value); else StopAllMachines(); },
+                () =>
+                {
+                    bool restart = _machine1Running || _machine2Running || _machine3Running || _machine4Running || _machine5Running || _machine6Running;
+                    StopAllMachines();
+                    LoadConfiguration();
+                    if (restart) StartAllMachines();
+                },
+                GetAgentDeviceSnapshots);
+        }
+
+        private IList<AgentDeviceSnapshot> GetAgentDeviceSnapshots()
+        {
+            int[] successes = { _machine1Success, _machine2Success, _machine3Success, _machine4Success, _machine5Success, _machine6Success };
+            int[] failures = { _machine1Fail, _machine2Fail, _machine3Fail, _machine4Fail, _machine5Fail, _machine6Fail };
+            bool[] running = { _machine1Running, _machine2Running, _machine3Running, _machine4Running, _machine5Running, _machine6Running };
+            var result = new List<AgentDeviceSnapshot>();
+            lock (_queueLock)
+            {
+                for (int i = 1; i <= 6; i++)
+                {
+                    var config = _machineConfigs.FirstOrDefault(x => x.Id == i);
+                    result.Add(new AgentDeviceSnapshot
+                    {
+                        DeviceId = i.ToString(), Name = config?.Name ?? $"机台{i}", State = running[i - 1] ? 1 : 0,
+                        QueueDepth = _queueItems.Count(x => x.MachineId == i && (x.Status == "等待中" || x.Status == "处理中")),
+                        TodaySuccess = successes[i - 1], TodayFailure = failures[i - 1]
+                    });
+                }
+            }
+            return result;
         }
 
 
@@ -720,6 +763,10 @@ namespace MachineDataAcquisitionSystem
                 _processingFiles.Add(fileKey);
             }
 
+            var deviceLimit = _deviceProcessingLimits.GetOrAdd(machineId, _ => new System.Threading.SemaphoreSlim(1, 1));
+            await deviceLimit.WaitAsync();
+            await _globalProcessingLimit.WaitAsync();
+
             try
             {
                 // 添加到队列
@@ -788,25 +835,22 @@ namespace MachineDataAcquisitionSystem
                 {
                     try
                     {
-                        //bool saveSuccess = await SaveToServerDatabase(model);
-
                         // ========== 补全基类默认值 ==========
-                        await FillDefaultValues(model);
-                        AddToBatch(model);
-                        AddLog($"[机台{machineId}] 数据已加入批量队列", LogLevel.Success);
-                        //if (!saveSuccess)
-                        //{
-                        //    AddLog($"[机台{machineId}] 保存到服务器数据库失败", LogLevel.Error);
-                        //}
-                        //else
-                        //{
-                        //    AddLog($"[机台{machineId}] 数据已保存到服务器数据库", LogLevel.Success);
-                        //}
+                        FillDefaultValues(model);
+                        bool saveSuccess = await SaveToServerDatabaseWithRetry(model, machineId, fileName);
+                        if (!saveSuccess)
+                            throw new InvalidOperationException("目标数据库连续3次提交失败，文件不能归档为成功。");
+                        AddLog($"[机台{machineId}] 数据库已确认提交", LogLevel.Success);
                     }
                     catch (Exception ex)
                     {
                         AddLog($"[机台{machineId}] 保存数据库异常: {ex.Message}", LogLevel.Error);
+                        throw;
                     }
+                }
+                else
+                {
+                    throw new InvalidOperationException("解析脚本未返回可入库的数据模型。");
                 }
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 90);
@@ -855,6 +899,8 @@ namespace MachineDataAcquisitionSystem
                 {
                     _processingFiles.Remove(fileKey);
                 }
+                _globalProcessingLimit.Release();
+                deviceLimit.Release();
 
                 // ========== 保存处理记录到 SQLite 本地数据库 ==========
                 SaveProcessRecord(machineId, fileName, isSuccess, recordCount, errorMsg, startTime);
@@ -863,10 +909,25 @@ namespace MachineDataAcquisitionSystem
             }
         }
 
+        private async Task<bool> SaveToServerDatabaseWithRetry(object model, int machineId, string fileName)
+        {
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                if (await SaveToServerDatabase(model)) return true;
+                if (attempt < 3)
+                {
+                    int delay = 500 * (1 << (attempt - 1));
+                    AddLog($"[机台{machineId}] {fileName} 入库失败，第{attempt}次重试将在{delay}ms后执行", LogLevel.Warning);
+                    await Task.Delay(delay);
+                }
+            }
+            return false;
+        }
+
         /// <summary>
         /// 补全基类字段默认值
         /// </summary>
-        private async Task FillDefaultValues(object model)
+        private void FillDefaultValues(object model)
         {
             try
             {
@@ -1801,6 +1862,7 @@ namespace MachineDataAcquisitionSystem
 
         protected override async void OnFormClosing(FormClosingEventArgs e)
         {
+            _remoteAgentBridge?.Dispose();
             // 停止日志写入线程
             _isLogDbRunning = false;
             // 刷新剩余数据到数据库

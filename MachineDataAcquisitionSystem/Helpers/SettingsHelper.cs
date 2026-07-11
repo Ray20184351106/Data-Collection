@@ -3,6 +3,10 @@ using System;
 using System.IO;
 using Newtonsoft.Json;
 using MachineDataAcquisitionSystem.Models;
+using System.Security.Cryptography;
+using System.Text;
+using Newtonsoft.Json.Linq;
+using System.Linq;
 
 namespace MachineDataAcquisitionSystem.Helpers
 {
@@ -30,6 +34,28 @@ namespace MachineDataAcquisitionSystem.Helpers
             {
                 string json = File.ReadAllText(SettingsPath);
                 _settings = JsonConvert.DeserializeObject<AppSettings>(json) ?? new AppSettings();
+                bool needsMigration = false;
+                if (_settings.Databases != null)
+                {
+                    foreach (var database in _settings.Databases)
+                    {
+                        if (!string.IsNullOrEmpty(database.Password))
+                        {
+                            if (database.Password.StartsWith("dpapi:", StringComparison.Ordinal))
+                                database.Password = Unprotect(database.Password.Substring(6));
+                            else
+                                needsMigration = true;
+                        }
+                        if (!string.IsNullOrEmpty(database.ConnectionString))
+                        {
+                            if (database.ConnectionString.StartsWith("dpapi:", StringComparison.Ordinal))
+                                database.ConnectionString = Unprotect(database.ConnectionString.Substring(6));
+                            else
+                                needsMigration = true;
+                        }
+                    }
+                }
+                if (needsMigration) SaveSettings(_settings);
                 return _settings;
             }
             catch
@@ -46,11 +72,41 @@ namespace MachineDataAcquisitionSystem.Helpers
         {
             try
             {
-                string json = JsonConvert.SerializeObject(settings, Formatting.Indented);
+                JObject document = JObject.FromObject(settings);
+                var databases = document["Databases"] as JArray;
+                if (databases != null)
+                {
+                    foreach (var item in databases.OfType<JObject>())
+                    {
+                        string password = item.Value<string>("Password");
+                        if (!string.IsNullOrEmpty(password) && !password.StartsWith("dpapi:", StringComparison.Ordinal))
+                            item["Password"] = "dpapi:" + Protect(password);
+                        string connectionString = item.Value<string>("ConnectionString");
+                        if (!string.IsNullOrEmpty(connectionString) && !connectionString.StartsWith("dpapi:", StringComparison.Ordinal))
+                            item["ConnectionString"] = "dpapi:" + Protect(connectionString);
+                    }
+                }
+                string json = document.ToString(Formatting.Indented);
                 File.WriteAllText(SettingsPath, json);
                 _settings = settings;
             }
             catch { }
+        }
+
+        private static string Protect(string value)
+        {
+            byte[] encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null, DataProtectionScope.CurrentUser);
+            return Convert.ToBase64String(encrypted);
+        }
+
+        private static string Unprotect(string value)
+        {
+            try
+            {
+                byte[] decrypted = ProtectedData.Unprotect(Convert.FromBase64String(value), null, DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(decrypted);
+            }
+            catch { return string.Empty; }
         }
 
         /// <summary>
