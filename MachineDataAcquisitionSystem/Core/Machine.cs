@@ -7,9 +7,6 @@ using MachineDataAcquisitionSystem.Core.Parser;
 using MachineDataAcquisitionSystem.Data;
 using MachineDataAcquisitionSystem.Models;
 using MachineDataAcquisitionSystem.Core.Monitor;
-using MachineDataAcquisitionSystem.Core.Parser;
-using MachineDataAcquisitionSystem.Data;
-using MachineDataAcquisitionSystem.Models;
 
 namespace MachineDataAcquisitionSystem.Core
 {
