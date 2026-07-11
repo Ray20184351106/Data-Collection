@@ -1,100 +1,136 @@
-# 文件数据采集系统 (Machine Data Acquisition System)
+# 文件数据采集集中管理平台（公司内网版）
 
-> **原创作者：禤总**  
-> 感谢禤总的卓越设计与原创贡献，为设备数据采集领域提供了高效、稳定的解决方案。
+本版本面向同一公司局域网内约 10～50 台设备电脑，目标是稳定采集、集中查看、断网不丢记录和统一修改配置。
 
-## 项目概述
+## 必要组成
 
-文件数据采集系统是一套基于 .NET Framework 4.8 + WinForms 的桌面应用程序，用于**自动监控、采集、解析和存储**设备（机床等）产生的数据文件。系统支持多设备并发监控、多种文件格式解析、脚本匹配引擎以及数据可视化查询。
+- `MachineDataAcquisitionSystem`：设备电脑上的 WinForms 采集和本地诊断界面。
+- `Acquisition.Agent`：设备电脑上的 Windows 服务，负责心跳、SQLite 离线缓存、记录补传、远程命令和配置同步。
+- `Acquisition.Center`：中心 API、SignalR、Web 看板和集中配置。
+- SQL Server：保存 Agent、设备状态、采集记录、命令、配置和告警。
 
-通过实时监控指定目录中的文件变化，自动解析文件内容并写入数据库，实现对设备运行数据的自动化采集与存储。
+内网第一版不要求 HTTPS、客户端证书、用户角色、配置审批和灰度发布。Agent 使用 `AgentId + RegistrationKey` 接入，中心配置保存后立即同步到全部选中 Agent。
 
-## 主要功能
+## 开发环境启动
 
-- **文件实时监控** — 多线程并发监控多个设备的文件目录，自动识别新增文件
-- **文件解析引擎** — 支持 JSON、TXT 等格式解析，内置可扩展的解析器接口 (`IParser`)
-- **脚本匹配引擎** — 支持通过脚本规则对文件内容进行匹配与提取
-- **动态建表** — 根据设备配置自动生成对应的数据表结构
-- **多数据库支持** — 集成 SQLite（本地存储）与 MySQL（远程存储），通过 SqlSugar ORM 统一访问
-- **数据查询与统计** — 提供可视化查询界面，支持按设备、时间范围检索与统计
-- **处理队列管理** — 实时展示文件处理队列状态、处理速度、成功/失败统计
-- **日志记录** — 完整的操作日志记录与查看功能
+启动中心：
 
-## 技术栈
-
-| 组件 | 技术 |
-|------|------|
-| 运行时 | .NET Framework 4.8 |
-| 界面 | Windows Forms (WinForms) |
-| ORM | SqlSugar 5.1.4 |
-| 数据库 | SQLite (本地) / MySQL (远程) |
-| JSON 解析 | Newtonsoft.Json 13.0.4 |
-| Excel 导出 | NPOI 2.8.0 |
-| ID 生成 | Yitter.IdGenerator (雪花算法) |
-| 图表绘制 | SkiaSharp |
-
-## 项目结构
-
-```
-MachineDataAcquisitionSystem/
-├── Core/                     # 核心逻辑
-│   ├── FileWatcher.cs        # 文件监控器
-│   ├── FileParser.cs         # 文件解析器
-│   ├── Machine.cs            # 设备模型
-│   ├── MachineManager.cs     # 设备管理器
-│   ├── ScriptEngine.cs       # 脚本引擎
-│   ├── ScriptMatcher.cs      # 脚本匹配器
-│   └── Parser/               # 解析器接口与实现
-│       ├── IParser.cs        # 解析器接口
-│       ├── JsonParser.cs     # JSON 解析器
-│       └── TxtParser.cs      # TXT 解析器
-├── Data/                     # 数据访问层
-│   ├── IDataRepository.cs    # 仓储接口
-│   └── MockRepository.cs     # Mock 实现
-├── Forms/                    # 界面窗体
-│   ├── Form1.cs              # 主窗体
-│   ├── ConfigForm.cs         # 配置窗体
-│   ├── QueryForm.cs          # 查询窗体
-│   ├── LogViewerForm.cs      # 日志查看器
-│   └── ModelConfigForm.cs    # 模型配置窗体
-├── Helpers/                  # 辅助工具类
-│   ├── ConfigHelper.cs       # 配置帮助类
-│   ├── DatabaseHelper.cs     # 数据库初始化
-│   ├── FileHelper.cs         # 文件操作帮助类
-│   ├── LogHelper.cs          # 日志帮助类
-│   └── SettingsHelper.cs     # 设置帮助类
-├── Models/                   # 数据模型
-│   ├── AppSettings.cs        # 应用配置
-│   ├── DatabaseConfig.cs     # 数据库配置
-│   ├── MachineConfig.cs      # 设备配置
-│   ├── MachineStatus.cs      # 设备状态
-│   ├── ParseScript.cs        # 解析脚本
-│   └── ProcessResult.cs      # 处理结果
-└── Resources/                # 资源文件
-    └── Images/               # 图标与图片资源
+```powershell
+$env:ASPNETCORE_ENVIRONMENT='Development'
+$env:ASPNETCORE_URLS='http://127.0.0.1:5080'
+dotnet run --project .\Acquisition.Center\Acquisition.Center.csproj
 ```
 
-## 使用说明
+启动 Agent：
 
-### 环境要求
+```powershell
+$env:DOTNET_ENVIRONMENT='Development'
+$env:Agent__AgentId='PC-001'
+$env:Agent__CenterBaseUrl='http://127.0.0.1:5080'
+$env:Agent__RegistrationKey='factory-registration-code'
+$env:Agent__LegacyDatabasePath='完整路径\Data\采集记录.db'
+$env:Agent__LegacyConfigPath='完整路径\config.json'
+dotnet run --project .\Acquisition.Agent\Acquisition.Agent.csproj
+```
 
-- Windows 7 / 10 / 11
-- .NET Framework 4.8 运行时
-- Visual Studio 2022（如需编译）
+浏览器访问 `http://127.0.0.1:5080`，无需登录。
 
-### 启动
+## 生产环境最低准备
 
-1. 使用 Visual Studio 打开 `MachineDataAcquisitionSystem.sln`
-2. 在 NuGet 包管理器中还原依赖包
-3. 按 `F5` 直接运行
+### 中心服务器
 
-### 配置流程
+1. 准备一台可长期运行的 Windows Server 或固定 Windows 电脑。
+2. 安装 .NET 8 Hosting Bundle/Runtime。
+3. 准备正式 SQL Server 数据库；不要使用 LocalDB。
+4. 为中心服务分配固定内网 IP，例如 `192.168.1.100`。
+5. 在防火墙开放中心端口，例如 TCP `5080`。
 
-1. **设备配置** — 在配置界面中添加设备，设置设备名称、监控目录、成功/失败目录
-2. **解析配置** — 配置文件解析规则，选择解析器类型（JSON / TXT）
-3. **脚本配置** — 编写匹配脚本，定义数据提取规则
-4. **启动监控** — 返回主界面，启动文件监控，系统自动采集数据
+中心配置示例：
 
-## 许可
+```powershell
+$env:ASPNETCORE_URLS='http://0.0.0.0:5080'
+$env:ConnectionStrings__CenterDatabase='Server=SQL服务器;Database=AcquisitionCenter;Integrated Security=true;Encrypt=false'
+$env:InternalLan__Enabled='true'
+$env:InternalLan__RegistrationKey='公司自定义注册码'
+```
 
-本项目仅供学习和参考。
+中心首次启动会自动创建必要表。SQL Server账号只需授予 `AcquisitionCenter` 数据库的读写和建表权限，不需要使用 `sa`。
+
+### 每台设备电脑
+
+1. 发布并安装 `Acquisition.Agent`。
+2. 为每台电脑配置唯一 `AgentId`，例如 `LINE01-PC01`。
+3. `CenterBaseUrl` 指向中心内网地址，例如 `http://192.168.1.100:5080`。
+4. `RegistrationKey` 与中心一致。
+5. 配置原 WinForms 的 SQLite记录库和 `config.json` 路径。
+6. 将 Agent 注册成自动启动的 Windows 服务。
+
+示例配置：
+
+```json
+{
+  "Agent": {
+    "AgentId": "LINE01-PC01",
+    "CenterBaseUrl": "http://192.168.1.100:5080",
+    "RegistrationKey": "公司自定义注册码",
+    "LocalDatabasePath": "C:\\ProgramData\\AcquisitionAgent\\agent.db",
+    "LegacyDatabasePath": "D:\\采集程序\\Data\\采集记录.db",
+    "LegacyConfigPath": "D:\\采集程序\\config.json",
+    "Site": "一厂一楼",
+    "HeartbeatSeconds": 10
+  }
+}
+```
+
+Agent 与 WinForms 默认共享 `C:\ProgramData\AcquisitionAgent\agent.db`。两个程序的运行账号都需要该目录的修改权限，也可以通过 `ACQUISITION_AGENT_DB` 为 WinForms 指定相同路径。
+
+## 集中配置
+
+Web页面使用“保存并同步到全部Agent”。中心先校验 JSON，再生成不可覆盖的新版本并立即下发。Agent写入临时文件，WinForms在10秒内确认重载后才算成功；未确认则恢复 `.previous` 文件。
+
+最小配置结构：
+
+```json
+{
+  "machines": [
+    {
+      "id": 1,
+      "name": "机台1",
+      "monitorPath": "D:\\Test\\Machine1\\Incoming",
+      "successPath": "D:\\Test\\Machine1\\Success",
+      "errorPath": "D:\\Test\\Machine1\\Error"
+    }
+  ]
+}
+```
+
+中心不会下发任意 C# 脚本，只同步声明式设备和解析配置。
+
+## 现场上线顺序
+
+1. 部署中心和 SQL Server。
+2. 先安装 1 台 Agent，确认心跳、历史记录补传和远程刷新。
+3. 断开中心网络，确认本地采集继续运行；恢复后记录自动补传。
+4. 再扩展到 5 台、10 台，最后扩展到全部设备。
+5. SQL Server每天至少做一次完整备份。
+
+## 构建和测试
+
+```powershell
+& 'C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe' .\MachineDataAcquisitionSystem.sln /t:Build /p:Configuration=Release
+dotnet test .\tests\Acquisition.Contracts.Tests\Acquisition.Contracts.Tests.csproj
+dotnet test .\tests\Acquisition.Agent.Tests\Acquisition.Agent.Tests.csproj
+dotnet test .\tests\Acquisition.Center.Tests\Acquisition.Center.Tests.csproj
+```
+
+中心集成测试使用真实 SQL Server LocalDB，Agent集成测试使用真实 SQLite 文件。现有 NPOI 包仍会提示 OSMF EULA，需要公司决定继续使用或后续替换；这不影响本次内网架构调整。
+
+## 暂不实施
+
+- HTTPS、企业CA和Agent客户端证书。
+- Web用户、角色和审批流。
+- 配置试点/20%/全量灰度流程。
+- Agent自动升级。
+- 公网访问和跨厂区安全接入。
+
+这些能力如果以后确有需求，可以在当前接口版本上追加，不影响现有 Agent 的采集和离线补传。
