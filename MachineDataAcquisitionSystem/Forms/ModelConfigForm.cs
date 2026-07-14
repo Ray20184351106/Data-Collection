@@ -1304,48 +1304,21 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void btnExcelTemplate_Click(object sender, EventArgs e)
         {
-            string template = @"
-                // Excel 解析模板（使用 NPOI）
-                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                {
-                    // 根据扩展名选择不同的 Workbook
-                    NPOI.SS.UserModel.IWorkbook workbook;
-                    if (filePath.EndsWith("".xlsx""))
-                    {
-                        workbook = new XSSFWorkbook(fs);  // .xlsx
-                    }
-                    else
-                    {
-                        workbook = new HSSFWorkbook(fs);  // .xls
-                    }
-    
-                    var sheet = workbook.GetSheetAt(0);
-    
-                    // 创建 Model 对象（替换成你的模型名称）
-                    var model = new TestData();
-    
-                    // 读取指定位置的值（带空值处理）
-                    model.ProductSn = sheet.GetRow(0)?.GetCell(0)?.ToString() ?? """";
-    
-                    // 安全转换 decimal
-                    string testValueStr = sheet.GetRow(1)?.GetCell(0)?.ToString();
-                    if (decimal.TryParse(testValueStr, out decimal testValue))
-                    {
-                        model.TestValue = testValue;
-                    }
-                    else
-                    {
-                        model.TestValue = 0;
-                    }
-    
-                    model.TestTime = DateTime.Now;
-                    model.MachineId = machineId;
-                    model.FileName = Path.GetFileName(filePath);
-    
-                    return model;
-                }";
+            var selectedModel = cmbScriptModel.SelectedItem as ModelItem;
+            if (selectedModel == null)
+            {
+                MessageBox.Show("请先选择关联模型。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
 
-            rtxtScriptCode.Text = template;
+            try
+            {
+                rtxtScriptCode.Text = ExcelDemoScriptTemplate.Create(selectedModel.Name);
+            }
+            catch (ArgumentException ex)
+            {
+                MessageBox.Show(ex.Message, "模型名称无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         private void btnCsvTemplate_Click(object sender, EventArgs e)

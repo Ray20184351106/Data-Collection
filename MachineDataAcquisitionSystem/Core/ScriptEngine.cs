@@ -73,6 +73,8 @@ namespace MachineDataAcquisitionSystem.Core
             compilerParams.ReferencedAssemblies.Add("System.IO.dll");
             compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(XSSFWorkbook)).Location);
             compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(HSSFWorkbook)).Location);
+            compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(NPOI.OpenXml4Net.OPC.OPCPackage)).Location);
+            compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(NPOI.OpenXmlFormats.Spreadsheet.CT_Workbook)).Location);
             compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(Newtonsoft.Json.JsonConvert)).Location);
             compilerParams.ReferencedAssemblies.Add(Assembly.GetExecutingAssembly().Location);
 
