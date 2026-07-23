@@ -14,6 +14,8 @@ using SqlSugar;
 using System.Data.SQLite;
 using Yitter.IdGenerator;
 using System.Collections.Concurrent;
+using CancellationToken = System.Threading.CancellationToken;
+using SemaphoreSlim = System.Threading.SemaphoreSlim;
 
 namespace MachineDataAcquisitionSystem
 {
@@ -48,6 +50,9 @@ namespace MachineDataAcquisitionSystem
 
         // 文件监控器
         private Dictionary<int, FileWatcher> _fileWatchers = new Dictionary<int, FileWatcher>();
+        private HashSet<int> _stoppingMachines = new HashSet<int>();
+        private bool _shutdownInProgress;
+        private bool _shutdownCompleted;
         private FileParser _fileParser = new FileParser();
 
         // 机台监控路径
@@ -453,12 +458,12 @@ namespace MachineDataAcquisitionSystem
         private void BindButtonEvents()
         {
             // 机台按钮
-            btn1.Click += (s, e) => ToggleMachine(1);
-            btn2.Click += (s, e) => ToggleMachine(2);
-            btn3.Click += (s, e) => ToggleMachine(3);
-            btn4.Click += (s, e) => ToggleMachine(4);
-            btn5.Click += (s, e) => ToggleMachine(5);
-            btn6.Click += (s, e) => ToggleMachine(6);
+            btn1.Click += async (s, e) => await ToggleMachineAsync(1);
+            btn2.Click += async (s, e) => await ToggleMachineAsync(2);
+            btn3.Click += async (s, e) => await ToggleMachineAsync(3);
+            btn4.Click += async (s, e) => await ToggleMachineAsync(4);
+            btn5.Click += async (s, e) => await ToggleMachineAsync(5);
+            btn6.Click += async (s, e) => await ToggleMachineAsync(6);
 
             // 工具栏按钮（假设你叫这些名字，如果不是请告诉我）
             // btnStartAll.Click += BtnStartAll_Click;
@@ -469,27 +474,27 @@ namespace MachineDataAcquisitionSystem
         }
 
         // ========== 切换机台启动/停止 ==========
-        private void ToggleMachine(int machineId)
+        private async Task ToggleMachineAsync(int machineId)
         {
             switch (machineId)
             {
                 case 1:
-                    if (_machine1Running) StopMachine(1); else StartMachine(1);
+                    if (_machine1Running) await StopMachineAsync(1); else StartMachine(1);
                     break;
                 case 2:
-                    if (_machine2Running) StopMachine(2); else StartMachine(2);
+                    if (_machine2Running) await StopMachineAsync(2); else StartMachine(2);
                     break;
                 case 3:
-                    if (_machine3Running) StopMachine(3); else StartMachine(3);
+                    if (_machine3Running) await StopMachineAsync(3); else StartMachine(3);
                     break;
                 case 4:
-                    if (_machine4Running) StopMachine(4); else StartMachine(4);
+                    if (_machine4Running) await StopMachineAsync(4); else StartMachine(4);
                     break;
                 case 5:
-                    if (_machine5Running) StopMachine(5); else StartMachine(5);
+                    if (_machine5Running) await StopMachineAsync(5); else StartMachine(5);
                     break;
                 case 6:
-                    if (_machine6Running) StopMachine(6); else StartMachine(6);
+                    if (_machine6Running) await StopMachineAsync(6); else StartMachine(6);
                     break;
             }
         }
@@ -497,6 +502,12 @@ namespace MachineDataAcquisitionSystem
         // ========== 启动机台 ==========
         private void StartMachine(int machineId)
         {
+            if (_stoppingMachines.Contains(machineId))
+            {
+                AddLog($"机台{machineId} 正在停止，请稍后再启动", LogLevel.Warning);
+                return;
+            }
+
             switch (machineId)
             {
                 case 1:
@@ -504,7 +515,9 @@ namespace MachineDataAcquisitionSystem
 
                     // 创建并启动监控器
                     var watcher1 = new FileWatcher(_monitorPaths[1], _successPaths[1], _errorPaths[1]);
-                    watcher1.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher1.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher1.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[1] = watcher1;
                     watcher1.Start();
 
@@ -517,7 +530,9 @@ namespace MachineDataAcquisitionSystem
                     if (_machine2Running) return;
 
                     var watcher2 = new FileWatcher(_monitorPaths[2], _successPaths[2], _errorPaths[2]);
-                    watcher2.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher2.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher2.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[2] = watcher2;
                     watcher2.Start();
 
@@ -530,7 +545,9 @@ namespace MachineDataAcquisitionSystem
                     if (_machine3Running) return;
 
                     var watcher3 = new FileWatcher(_monitorPaths[3], _successPaths[3], _errorPaths[3]);
-                    watcher3.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher3.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher3.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[3] = watcher3;
                     watcher3.Start();
 
@@ -543,7 +560,9 @@ namespace MachineDataAcquisitionSystem
                     if (_machine4Running) return;
 
                     var watcher4 = new FileWatcher(_monitorPaths[4], _successPaths[4], _errorPaths[4]);
-                    watcher4.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher4.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher4.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[4] = watcher4;
                     watcher4.Start();
 
@@ -556,7 +575,9 @@ namespace MachineDataAcquisitionSystem
                     if (_machine5Running) return;
 
                     var watcher5 = new FileWatcher(_monitorPaths[5], _successPaths[5], _errorPaths[5]);
-                    watcher5.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher5.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher5.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[5] = watcher5;
                     watcher5.Start();
 
@@ -569,7 +590,9 @@ namespace MachineDataAcquisitionSystem
                     if (_machine6Running) return;
 
                     var watcher6 = new FileWatcher(_monitorPaths[6], _successPaths[6], _errorPaths[6]);
-                    watcher6.OnFileCreated += async (filePath) => await ProcessFile(machineId, filePath);
+                    watcher6.OnFileCreated += async (filePath, cancellationToken) =>
+                        await ProcessFile(machineId, filePath, cancellationToken);
+                    watcher6.OnError += ex => AddLog($"[机台{machineId}] 文件监听异常: {ex.Message}", LogLevel.Error);
                     _fileWatchers[6] = watcher6;
                     watcher6.Start();
 
@@ -585,129 +608,111 @@ namespace MachineDataAcquisitionSystem
         }
 
         // ========== 停止机台 ==========
-        private void StopMachine(int machineId)
+        private async Task StopMachineAsync(int machineId)
+        {
+            if (_stoppingMachines.Contains(machineId))
+            {
+                if (_fileWatchers.TryGetValue(machineId, out FileWatcher stoppingWatcher))
+                {
+                    await stoppingWatcher.StopAsync();
+                }
+                return;
+            }
+            if (!IsMachineRunning(machineId)) return;
+
+            _stoppingMachines.Add(machineId);
+            SetMachineRunning(machineId, false);
+            UpdateStatusBar();
+            AddLog($"机台{machineId} 正在立即停止并取消在途采集", LogLevel.Info);
+
+            try
+            {
+                if (_fileWatchers.TryGetValue(machineId, out FileWatcher watcher))
+                {
+                    await watcher.StopAsync();
+                    watcher.Dispose();
+                    _fileWatchers.Remove(machineId);
+                }
+
+                lock (_queueLock)
+                {
+                    _queueItems.RemoveAll(x => x.MachineId == machineId);
+                    _queueLength = _queueItems.Count;
+                }
+                DiscardCancelledBatchItems(machineId);
+                AddLog($"机台{machineId} 已停止，在途采集已取消", LogLevel.Info);
+            }
+            finally
+            {
+                _stoppingMachines.Remove(machineId);
+                RefreshQueueDisplay();
+                UpdateQueueStats();
+                UpdateStatusBar();
+                RefreshStatisticsPanel();
+            }
+        }
+
+        private bool IsMachineRunning(int machineId)
+        {
+            switch (machineId)
+            {
+                case 1: return _machine1Running;
+                case 2: return _machine2Running;
+                case 3: return _machine3Running;
+                case 4: return _machine4Running;
+                case 5: return _machine5Running;
+                case 6: return _machine6Running;
+                default: return false;
+            }
+        }
+
+        private void SetMachineRunning(int machineId, bool isRunning)
         {
             switch (machineId)
             {
                 case 1:
-                    if (!_machine1Running) return;
-
-                    if (_fileWatchers.ContainsKey(1))
-                    {
-                        _fileWatchers[1].Stop();
-                        _fileWatchers[1].Dispose();
-                        _fileWatchers.Remove(1);
-                    }
-
-                    _machine1Running = false;
+                    _machine1Running = isRunning;
                     UpdateMachine1UI();
-                    AddLog($"机台1 已停止", LogLevel.Info);
                     break;
-
                 case 2:
-                    if (!_machine2Running) return;
-
-                    if (_fileWatchers.ContainsKey(2))
-                    {
-                        _fileWatchers[2].Stop();
-                        _fileWatchers[2].Dispose();
-                        _fileWatchers.Remove(2);
-                    }
-
-                    _machine2Running = false;
+                    _machine2Running = isRunning;
                     UpdateMachine2UI();
-                    AddLog($"机台2 已停止", LogLevel.Info);
                     break;
-
                 case 3:
-                    if (!_machine3Running) return;
-
-                    if (_fileWatchers.ContainsKey(3))
-                    {
-                        _fileWatchers[3].Stop();
-                        _fileWatchers[3].Dispose();
-                        _fileWatchers.Remove(3);
-                    }
-
-                    _machine3Running = false;
+                    _machine3Running = isRunning;
                     UpdateMachine3UI();
-                    AddLog($"机台3 已停止", LogLevel.Info);
                     break;
-
                 case 4:
-                    if (!_machine4Running) return;
-
-                    if (_fileWatchers.ContainsKey(4))
-                    {
-                        _fileWatchers[4].Stop();
-                        _fileWatchers[4].Dispose();
-                        _fileWatchers.Remove(4);
-                    }
-
-                    _machine4Running = false;
+                    _machine4Running = isRunning;
                     UpdateMachine4UI();
-                    AddLog($"机台4 已停止", LogLevel.Info);
                     break;
-
                 case 5:
-                    if (!_machine5Running) return;
-
-                    if (_fileWatchers.ContainsKey(5))
-                    {
-                        _fileWatchers[5].Stop();
-                        _fileWatchers[5].Dispose();
-                        _fileWatchers.Remove(5);
-                    }
-
-                    _machine5Running = false;
+                    _machine5Running = isRunning;
                     UpdateMachine5UI();
-                    AddLog($"机台5 已停止", LogLevel.Info);
                     break;
-
                 case 6:
-                    if (!_machine6Running) return;
-
-                    if (_fileWatchers.ContainsKey(6))
-                    {
-                        _fileWatchers[6].Stop();
-                        _fileWatchers[6].Dispose();
-                        _fileWatchers.Remove(6);
-                    }
-
-                    _machine6Running = false;
+                    _machine6Running = isRunning;
                     UpdateMachine6UI();
-                    AddLog($"机台6 已停止", LogLevel.Info);
                     break;
             }
-
-
-            // 清理该机台队列中的"等待中"项
-            lock (_queueLock)
-            {
-                var waitingItems = _queueItems.Where(x => x.MachineId == machineId && x.Status == "等待中").ToList();
-                foreach (var item in waitingItems)
-                {
-                    _queueItems.Remove(item);
-                }
-            }
-            RefreshQueueDisplay();
-
-            UpdateStatusBar();
-            // 刷新统计面板
-            RefreshStatisticsPanel();
         }
 
         /// <summary>
         /// 处理文件（解析并入库）
         /// </summary>
-        private async Task ProcessFile(int machineId, string filePath)
+        private async Task ProcessFile(int machineId, string filePath, CancellationToken cancellationToken)
         {
             string fileName = Path.GetFileName(filePath);
             string fileKey = $"{machineId}_{fileName}";
             DateTime startTime = DateTime.Now;
             bool isSuccess = false;
+            bool isCancelled = false;
+            bool acquisitionCommitted = false;
             int recordCount = 0;
             string errorMsg = null;
+            BatchItem batchItem = null;
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // ========== 防重复1：检查是否正在处理中 ==========
             lock (_processingLock)
@@ -722,6 +727,8 @@ namespace MachineDataAcquisitionSystem
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+
                 // 添加到队列
                 AddToQueue(machineId, fileName);
 
@@ -730,24 +737,27 @@ namespace MachineDataAcquisitionSystem
 
                 // ========== 2. 查找匹配脚本 ==========
                 var script = ScriptMatcher.Match(machineId, filePath);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 if (script == null)
                 {
                     AddLog($"[机台{machineId}] 未找到匹配的解析脚本: {fileName}", LogLevel.Warning);
                     UpdateQueueStatus(machineId, fileName, "失败", 100);
 
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (_fileWatchers.ContainsKey(machineId))
                     {
                         _fileWatchers[machineId].MoveToError(filePath);
                     }
 
+                    cancellationToken.ThrowIfCancellationRequested();
                     UpdateMachineStats(machineId, false);
 
                     isSuccess = false;
                     errorMsg = "未找到匹配的解析脚本";
                     recordCount = 0;
 
-                    await Task.Delay(2000);
+                    await Task.Delay(2000, cancellationToken);
                     RemoveFromQueue(machineId, fileName);
                     return;
                 }
@@ -759,8 +769,14 @@ namespace MachineDataAcquisitionSystem
                 object model = null;
                 try
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     model = ScriptEngine.Execute(script.ScriptCode, filePath, machineId, script.ModelId);
+                    cancellationToken.ThrowIfCancellationRequested();
                     recordCount = 1; // 脚本返回一个模型对象
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -768,15 +784,17 @@ namespace MachineDataAcquisitionSystem
                     AddLog($"[机台{machineId}] {errorMsg}", LogLevel.Error);
                     UpdateQueueStatus(machineId, fileName, "失败", 100);
 
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (_fileWatchers.ContainsKey(machineId))
                     {
                         _fileWatchers[machineId].MoveToError(filePath);
                     }
 
+                    cancellationToken.ThrowIfCancellationRequested();
                     UpdateMachineStats(machineId, false);
 
                     isSuccess = false;
-                    await Task.Delay(2000);
+                    await Task.Delay(2000, cancellationToken);
                     RemoveFromQueue(machineId, fileName);
                     return;
                 }
@@ -791,8 +809,10 @@ namespace MachineDataAcquisitionSystem
                         //bool saveSuccess = await SaveToServerDatabase(model);
 
                         // ========== 补全基类默认值 ==========
+                        cancellationToken.ThrowIfCancellationRequested();
                         await FillDefaultValues(model);
-                        AddToBatch(model);
+                        cancellationToken.ThrowIfCancellationRequested();
+                        batchItem = AddToBatch(machineId, model, cancellationToken);
                         AddLog($"[机台{machineId}] 数据已加入批量队列", LogLevel.Success);
                         //if (!saveSuccess)
                         //{
@@ -803,9 +823,14 @@ namespace MachineDataAcquisitionSystem
                         //    AddLog($"[机台{machineId}] 数据已保存到服务器数据库", LogLevel.Success);
                         //}
                     }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
                     catch (Exception ex)
                     {
                         AddLog($"[机台{machineId}] 保存数据库异常: {ex.Message}", LogLevel.Error);
+                        throw;
                     }
                 }
 
@@ -815,25 +840,47 @@ namespace MachineDataAcquisitionSystem
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 95);
 
-                if (_fileWatchers.ContainsKey(machineId))
+                cancellationToken.ThrowIfCancellationRequested();
+                MarkBatchItemReady(batchItem, cancellationToken);
+                try
                 {
-                    _fileWatchers[machineId].MoveToSuccess(filePath);
+                    if (_fileWatchers.ContainsKey(machineId))
+                    {
+                        _fileWatchers[machineId].MoveToSuccess(filePath);
+                    }
+                }
+                catch
+                {
+                    RemoveBatchItem(batchItem);
+                    throw;
                 }
 
+                acquisitionCommitted = true;
                 UpdateMachineStats(machineId, true);
 
                 isSuccess = true;
                 errorMsg = null;
 
                 UpdateQueueStatus(machineId, fileName, "成功", 100);
-                await Task.Delay(2000);
                 RemoveFromQueue(machineId, fileName);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                isCancelled = true;
+                RemoveBatchItem(batchItem);
+                AddLog($"[机台{machineId}] 采集已取消，文件保留在原目录: {fileName}", LogLevel.Warning);
+                UpdateQueueStatus(machineId, fileName, "已取消", 100);
             }
             catch (Exception ex)
             {
+                if (!acquisitionCommitted)
+                {
+                    RemoveBatchItem(batchItem);
+                }
                 AddLog($"[机台{machineId}] 处理文件异常: {ex.Message}", LogLevel.Error);
                 UpdateQueueStatus(machineId, fileName, "失败", 100);
 
+                cancellationToken.ThrowIfCancellationRequested();
                 if (_fileWatchers.ContainsKey(machineId))
                 {
                     _fileWatchers[machineId].MoveToError(filePath);
@@ -845,7 +892,7 @@ namespace MachineDataAcquisitionSystem
                 errorMsg = ex.Message;
                 recordCount = 0;
 
-                await Task.Delay(2000);
+                await Task.Delay(2000, cancellationToken);
                 RemoveFromQueue(machineId, fileName);
             }
             finally
@@ -856,10 +903,16 @@ namespace MachineDataAcquisitionSystem
                     _processingFiles.Remove(fileKey);
                 }
 
-                // ========== 保存处理记录到 SQLite 本地数据库 ==========
-                SaveProcessRecord(machineId, fileName, isSuccess, recordCount, errorMsg, startTime);
-
-                AddLog($"[机台{machineId}] 文件 {fileName} 处理完成", LogLevel.Info);
+                if ((isCancelled || cancellationToken.IsCancellationRequested) && !acquisitionCommitted)
+                {
+                    RemoveFromQueue(machineId, fileName);
+                }
+                else
+                {
+                    // ========== 保存处理记录到 SQLite 本地数据库 ==========
+                    SaveProcessRecord(machineId, fileName, isSuccess, recordCount, errorMsg, startTime);
+                    AddLog($"[机台{machineId}] 文件 {fileName} 处理完成", LogLevel.Info);
+                }
             }
         }
 
@@ -1673,10 +1726,18 @@ namespace MachineDataAcquisitionSystem
         }
 
         // ========== 批量插入相关 ==========
-        private List<object> _batchDataList = new List<object>();
+        private class BatchItem
+        {
+            public int MachineId { get; set; }
+            public object Model { get; set; }
+            public CancellationToken CancellationToken { get; set; }
+            public bool IsReadyToPersist { get; set; }
+        }
+
+        private List<BatchItem> _batchDataList = new List<BatchItem>();
         private object _batchLock = new object();
         private Timer _batchTimer;
-        private bool _isBatching = false;
+        private readonly SemaphoreSlim _batchFlushGate = new SemaphoreSlim(1, 1);
         private int _batchSize = 100;      // 每100条批量插入一次
         private int _batchInterval = 5000;  // 或每5秒批量插入一次
 
@@ -1700,13 +1761,21 @@ namespace MachineDataAcquisitionSystem
         /// <summary>
         /// 添加数据到批量队列
         /// </summary>
-        private void AddToBatch(object model)
+        private BatchItem AddToBatch(int machineId, object model, CancellationToken cancellationToken)
         {
-            if (model == null) return;
+            if (model == null) return null;
 
             lock (_batchLock)
             {
-                _batchDataList.Add(model);
+                cancellationToken.ThrowIfCancellationRequested();
+                var batchItem = new BatchItem
+                {
+                    MachineId = machineId,
+                    Model = model,
+                    CancellationToken = cancellationToken,
+                    IsReadyToPersist = false
+                };
+                _batchDataList.Add(batchItem);
                 AddLog($"加入批量队列，当前队列长度: {_batchDataList.Count}", LogLevel.Info);
 
                 // 达到批量大小，立即刷新
@@ -1714,6 +1783,44 @@ namespace MachineDataAcquisitionSystem
                 {
                     AddLog($"达到批量阈值 {_batchSize}，触发批量插入", LogLevel.Info);
                     Task.Run(async () => await FlushBatchAsync());
+                }
+
+                return batchItem;
+            }
+        }
+
+        private void MarkBatchItemReady(BatchItem batchItem, CancellationToken cancellationToken)
+        {
+            if (batchItem == null) return;
+
+            lock (_batchLock)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                batchItem.IsReadyToPersist = true;
+            }
+        }
+
+        private void RemoveBatchItem(BatchItem batchItem)
+        {
+            if (batchItem == null) return;
+
+            lock (_batchLock)
+            {
+                _batchDataList.Remove(batchItem);
+            }
+        }
+
+        private void DiscardCancelledBatchItems(int machineId)
+        {
+            lock (_batchLock)
+            {
+                int removed = _batchDataList.RemoveAll(
+                    x => x.MachineId == machineId
+                        && !x.IsReadyToPersist
+                        && x.CancellationToken.IsCancellationRequested);
+                if (removed > 0)
+                {
+                    AddLog($"[机台{machineId}] 已丢弃 {removed} 条暂停前尚未入库的数据", LogLevel.Info);
                 }
             }
         }
@@ -1723,30 +1830,29 @@ namespace MachineDataAcquisitionSystem
         /// </summary>
         private async Task FlushBatchAsync(bool silent = false)
         {
-            if (_isBatching) return;
+            if (!await _batchFlushGate.WaitAsync(0)) return;
 
-            List<object> dataToSave = null;
-            lock (_batchLock)
-            {
-                if (_batchDataList.Count == 0) return;
-                dataToSave = new List<object>(_batchDataList);
-                _batchDataList.Clear();
-                AddLog($"准备批量插入 {dataToSave.Count} 条数据", LogLevel.Info);
-            }
-
-            if (dataToSave == null || dataToSave.Count == 0) return;
-
-            _isBatching = true;
-
+            List<BatchItem> dataToSave = null;
             try
             {
+                lock (_batchLock)
+                {
+                    _batchDataList.RemoveAll(
+                        x => !x.IsReadyToPersist && x.CancellationToken.IsCancellationRequested);
+                    dataToSave = _batchDataList.Where(x => x.IsReadyToPersist).ToList();
+                    if (dataToSave.Count == 0) return;
+                    _batchDataList.RemoveAll(x => x.IsReadyToPersist);
+                    AddLog($"准备批量插入 {dataToSave.Count} 条数据", LogLevel.Info);
+                }
+
+                if (dataToSave == null || dataToSave.Count == 0) return;
+
                 var settings = SettingsHelper.LoadSettings();
                 var primaryDb = settings.Databases?.FirstOrDefault(d => d.IsPrimary);
 
                 if (primaryDb == null)
                 {
-                    AddLog("未配置主数据库，批量插入失败", LogLevel.Warning);
-                    return;
+                    throw new InvalidOperationException("未配置主数据库");
                 }
 
                 string connectionString = primaryDb.GetConnectionString();
@@ -1759,18 +1865,32 @@ namespace MachineDataAcquisitionSystem
                     IsAutoCloseConnection = true
                 }))
                 {
-                    // 按类型分组
-                    var groups = dataToSave.GroupBy(x => x.GetType());
-
-                    foreach (var group in groups)
+                    db.Ado.BeginTran();
+                    try
                     {
-                        // 转换为具体类型的列表
-                        var list = group.ToList();
-                        AddLog($"插入类型 {group.Key.Name}，共 {list.Count} 条", LogLevel.Info);
+                        int insertedRows = 0;
+                        // 按类型分组
+                        var groups = dataToSave.GroupBy(x => x.Model.GetType());
 
-                        // 使用 InsertableByObject
-                        int result = await db.InsertableByObject(list).IgnoreColumns("CID").ExecuteCommandAsync();
-                        AddLog($"插入成功，影响行数: {result}", LogLevel.Success);
+                        foreach (var group in groups)
+                        {
+                            var list = group.Select(x => x.Model).ToList();
+                            AddLog($"插入类型 {group.Key.Name}，共 {list.Count} 条", LogLevel.Info);
+
+                            int result = await db
+                                .InsertableByObject(list)
+                                .IgnoreColumns("CID")
+                                .ExecuteCommandAsync();
+                            insertedRows += result;
+                        }
+
+                        db.Ado.CommitTran();
+                        AddLog($"批量事务提交成功，影响行数: {insertedRows}", LogLevel.Success);
+                    }
+                    catch
+                    {
+                        db.Ado.RollbackTran();
+                        throw;
                     }
                 }
             }
@@ -1778,15 +1898,18 @@ namespace MachineDataAcquisitionSystem
             {
                 AddLog($"批量插入失败: {ex.Message}", LogLevel.Error);
 
-                // 失败时重新加入队列
-                lock (_batchLock)
+                if (dataToSave != null)
                 {
-                    _batchDataList.InsertRange(0, dataToSave);
+                    // 事务失败时整批重新排队，避免部分提交或数据丢失。
+                    lock (_batchLock)
+                    {
+                        _batchDataList.InsertRange(0, dataToSave);
+                    }
                 }
             }
             finally
             {
-                _isBatching = false;
+                _batchFlushGate.Release();
             }
         }
 
@@ -1801,19 +1924,39 @@ namespace MachineDataAcquisitionSystem
 
         protected override async void OnFormClosing(FormClosingEventArgs e)
         {
-            // 停止日志写入线程
-            _isLogDbRunning = false;
-            // 刷新剩余数据到数据库
-            await FlushRemainingData();
-
-            // 停止定时器
-            if (_batchTimer != null)
+            if (_shutdownCompleted)
             {
-                _batchTimer.Stop();
-                _batchTimer.Dispose();
+                base.OnFormClosing(e);
+                return;
             }
 
-            base.OnFormClosing(e);
+            e.Cancel = true;
+            if (_shutdownInProgress) return;
+
+            _shutdownInProgress = true;
+            Enabled = false;
+            try
+            {
+                _isLogDbRunning = false;
+                await StopAllMachinesAsync();
+                await FlushRemainingData();
+
+                if (_batchTimer != null)
+                {
+                    _batchTimer.Stop();
+                    _batchTimer.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLog($"程序关闭清理失败: {ex.Message}", LogLevel.Error);
+            }
+            finally
+            {
+                _shutdownCompleted = true;
+                _shutdownInProgress = false;
+                Close();
+            }
         }
 
         private void groupBox8_Enter(object sender, EventArgs e)
@@ -1842,17 +1985,15 @@ namespace MachineDataAcquisitionSystem
         /// <summary>
         /// 全停止 - 停止所有机台
         /// </summary>
-        private void StopAllMachines()
+        private async Task StopAllMachinesAsync()
         {
             AddLog("正在停止所有机台...", LogLevel.Info);
 
-            // 停止机台1-6
-            StopMachine(1);
-            StopMachine(2);
-            StopMachine(3);
-            StopMachine(4);
-            StopMachine(5);
-            StopMachine(6);
+            // 先同时向全部机台发出取消，再等待所有在途任务退出。
+            Task[] stopTasks = Enumerable.Range(1, 6)
+                .Select(StopMachineAsync)
+                .ToArray();
+            await Task.WhenAll(stopTasks);
 
             AddLog("所有机台已停止", LogLevel.Success);
         }
@@ -1871,9 +2012,9 @@ namespace MachineDataAcquisitionSystem
         /// </summary>
         /// <param name="sender"></param>
         /// <param name="e"></param>
-        private void toolStripButton5_Click(object sender, EventArgs e)
+        private async void toolStripButton5_Click(object sender, EventArgs e)
         {
-            StopAllMachines();
+            await StopAllMachinesAsync();
         }
         /// <summary>
         /// 导航栏日志按钮
