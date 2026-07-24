@@ -151,13 +151,17 @@ namespace MachineDataAcquisitionSystem
         private void InitRemoteAgentBridge()
         {
             _remoteAgentBridge = new RemoteAgentBridge(
-                machineId => { if (machineId.HasValue) StartMachine(machineId.Value); else StartAllMachines(); },
+                machineId =>
+                {
+                    if (machineId.HasValue) StartMachine(machineId.Value); else StartAllMachines();
+                    return Task.CompletedTask;
+                },
                 StopFromRemoteAgent,
                 ReloadFromRemoteAgent,
                 GetAgentDeviceSnapshots);
         }
 
-        private async void StopFromRemoteAgent(int? machineId)
+        private async Task StopFromRemoteAgent(int? machineId)
         {
             try
             {
@@ -173,10 +177,11 @@ namespace MachineDataAcquisitionSystem
             catch (Exception ex)
             {
                 AddLog($"远程停止机台失败: {ex.Message}", LogLevel.Error);
+                throw;
             }
         }
 
-        private async void ReloadFromRemoteAgent()
+        private async Task ReloadFromRemoteAgent()
         {
             try
             {
@@ -188,6 +193,7 @@ namespace MachineDataAcquisitionSystem
             catch (Exception ex)
             {
                 AddLog($"远程重载配置失败: {ex.Message}", LogLevel.Error);
+                throw;
             }
         }
 
