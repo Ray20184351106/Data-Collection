@@ -1,20 +1,27 @@
 ﻿// Core/FileWatcher.cs
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 namespace MachineDataAcquisitionSystem.Core.Parser
 .Core
 {
     public class FileWatcher : IDisposable
     {
+        private readonly object _stateLock = new object();
+        private readonly HashSet<Task> _activeTasks = new HashSet<Task>();
         private FileSystemWatcher _watcher;
-        private string _monitorPath;
-        private string _successPath;
-        private string _errorPath;
+        private CancellationTokenSource _cancellationTokenSource;
+        private readonly string _monitorPath;
+        private readonly string _successPath;
+        private readonly string _errorPath;
         private bool _isRunning;
 
         // 当有新文件时触发
-        public event Func<string, Task> OnFileCreated;
+        public event Func<string, CancellationToken, Task> OnFileCreated;
+        public event Action<Exception> OnError;
 
         public FileWatcher(string monitorPath, string successPath, string errorPath)
         {
@@ -35,45 +42,107 @@ namespace MachineDataAcquisitionSystem.Core.Parser
 
         public void Start()
         {
-            if (_isRunning) return;
-
-            _watcher = new FileSystemWatcher
+            lock (_stateLock)
             {
-                Path = _monitorPath,
-                Filter = "*.*",
-                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-                EnableRaisingEvents = true
-            };
+                if (_isRunning) return;
 
-            _watcher.Created += OnFileCreatedHandler;
-            _isRunning = true;
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = new CancellationTokenSource();
+                _watcher = new FileSystemWatcher
+                {
+                    Path = _monitorPath,
+                    Filter = "*.*",
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite
+                };
 
-            // 处理已有文件
+                _watcher.Created += OnFileCreatedHandler;
+                _watcher.Error += OnWatcherErrorHandler;
+                _isRunning = true;
+                _watcher.EnableRaisingEvents = true;
+            }
+
             ProcessExistingFiles();
         }
 
         public void Stop()
         {
-            if (!_isRunning) return;
-
-            if (_watcher != null)
-            {
-                _watcher.EnableRaisingEvents = false;
-                _watcher.Dispose();
-                _watcher = null;
-            }
-            _isRunning = false;
+            BeginStop();
         }
 
-        private async void OnFileCreatedHandler(object sender, FileSystemEventArgs e)
+        public async Task StopAsync()
         {
-            // 等待文件完全写入
-            if (!WaitForFileReady(e.FullPath)) return;
+            Task[] activeTasks = BeginStop();
+            if (activeTasks.Length == 0) return;
 
-            if (OnFileCreated != null)
+            try
             {
-                await OnFileCreated.Invoke(e.FullPath);
+                await Task.WhenAll(activeTasks).ConfigureAwait(false);
             }
+            catch (OperationCanceledException)
+            {
+                // 停止时取消在途任务属于预期行为。
+            }
+        }
+
+        private Task[] BeginStop()
+        {
+            lock (_stateLock)
+            {
+                if (_isRunning)
+                {
+                    _isRunning = false;
+
+                    if (_watcher != null)
+                    {
+                        _watcher.EnableRaisingEvents = false;
+                        _watcher.Created -= OnFileCreatedHandler;
+                        _watcher.Error -= OnWatcherErrorHandler;
+                        _watcher.Dispose();
+                        _watcher = null;
+                    }
+
+                    _cancellationTokenSource?.Cancel();
+                }
+
+                return _activeTasks.ToArray();
+            }
+        }
+
+        private void OnFileCreatedHandler(object sender, FileSystemEventArgs e)
+        {
+            QueueFile(e.FullPath);
+        }
+
+        private void OnWatcherErrorHandler(object sender, ErrorEventArgs e)
+        {
+            OnError?.Invoke(e.GetException());
+        }
+
+        private void QueueFile(string filePath)
+        {
+            Task processingTask;
+            lock (_stateLock)
+            {
+                if (!_isRunning || _cancellationTokenSource == null) return;
+
+                CancellationToken cancellationToken = _cancellationTokenSource.Token;
+                processingTask = Task.Run(
+                    () => ProcessFileAsync(filePath, cancellationToken),
+                    CancellationToken.None);
+                _activeTasks.Add(processingTask);
+            }
+
+            processingTask.ContinueWith(
+                completedTask =>
+                {
+                    lock (_stateLock)
+                    {
+                        _activeTasks.Remove(completedTask);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
         }
 
         private void ProcessExistingFiles()
@@ -81,18 +150,41 @@ namespace MachineDataAcquisitionSystem.Core.Parser
             var files = Directory.GetFiles(_monitorPath);
             foreach (var file in files)
             {
-                Task.Run(async () =>
-                {
-                    if (OnFileCreated != null)
-                        await OnFileCreated.Invoke(file);
-                });
+                QueueFile(file);
             }
         }
 
-        private bool WaitForFileReady(string filePath, int maxRetries = 10)
+        private async Task ProcessFileAsync(string filePath, CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (!await WaitForFileReadyAsync(filePath, cancellationToken).ConfigureAwait(false)) return;
+
+                cancellationToken.ThrowIfCancellationRequested();
+                var handler = OnFileCreated;
+                if (handler != null)
+                {
+                    await handler.Invoke(filePath, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // 停止机台后丢弃在途处理。
+            }
+            catch (Exception ex)
+            {
+                OnError?.Invoke(ex);
+            }
+        }
+
+        private async Task<bool> WaitForFileReadyAsync(
+            string filePath,
+            CancellationToken cancellationToken,
+            int maxRetries = 10)
         {
             for (int i = 0; i < maxRetries; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     using (FileStream fs = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -102,7 +194,7 @@ namespace MachineDataAcquisitionSystem.Core.Parser
                 }
                 catch (IOException)
                 {
-                    Task.Delay(100).Wait();
+                    await Task.Delay(100, cancellationToken).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -151,7 +243,12 @@ namespace MachineDataAcquisitionSystem.Core.Parser
 
         public void Dispose()
         {
-            Stop();
+            StopAsync().GetAwaiter().GetResult();
+            lock (_stateLock)
+            {
+                _cancellationTokenSource?.Dispose();
+                _cancellationTokenSource = null;
+            }
         }
     }
 }
