@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Data.SQLite;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace MachineDataAcquisitionSystem.Helpers
@@ -23,14 +24,14 @@ namespace MachineDataAcquisitionSystem.Helpers
     {
         private readonly string _connectionString;
         private readonly SynchronizationContext _uiContext;
-        private readonly Action<int?> _start;
-        private readonly Action<int?> _stop;
-        private readonly Action _reload;
+        private readonly Func<int?, Task> _start;
+        private readonly Func<int?, Task> _stop;
+        private readonly Func<Task> _reload;
         private readonly Func<IList<AgentDeviceSnapshot>> _getSnapshots;
         private readonly System.Threading.Timer _timer;
         private int _busy;
 
-        public RemoteAgentBridge(Action<int?> start, Action<int?> stop, Action reload, Func<IList<AgentDeviceSnapshot>> getSnapshots)
+        public RemoteAgentBridge(Func<int?, Task> start, Func<int?, Task> stop, Func<Task> reload, Func<IList<AgentDeviceSnapshot>> getSnapshots)
         {
             string configured = Environment.GetEnvironmentVariable("ACQUISITION_AGENT_DB");
             string path = string.IsNullOrWhiteSpace(configured)
@@ -48,7 +49,7 @@ namespace MachineDataAcquisitionSystem.Helpers
             try
             {
                 if (!DatabaseAvailable()) return;
-                ProcessCommands();
+                ProcessCommandsAsync().GetAwaiter().GetResult();
                 IList<AgentDeviceSnapshot> snapshots = null;
                 _uiContext.Send(_ => snapshots = _getSnapshots(), null);
                 SaveSnapshots(snapshots);
@@ -63,7 +64,7 @@ namespace MachineDataAcquisitionSystem.Helpers
             return File.Exists(builder.DataSource);
         }
 
-        private void ProcessCommands()
+        private async Task ProcessCommandsAsync()
         {
             using (var connection = new SQLiteConnection(_connectionString))
             {
@@ -78,7 +79,9 @@ namespace MachineDataAcquisitionSystem.Helpers
                     try
                     {
                         int? deviceId = int.TryParse(item.Item3, out int parsed) ? parsed : (int?)null;
-                        _uiContext.Send(_ => Execute(item.Item2, deviceId), null);
+                        Task commandTask = null;
+                        _uiContext.Send(_ => commandTask = ExecuteAsync(item.Item2, deviceId), null);
+                        await commandTask.ConfigureAwait(false);
                         SetCommandState(connection, item.Item1, 2, "执行成功。");
                     }
                     catch (Exception ex) { SetCommandState(connection, item.Item1, 3, ex.Message); }
@@ -86,14 +89,14 @@ namespace MachineDataAcquisitionSystem.Helpers
             }
         }
 
-        private void Execute(int type, int? deviceId)
+        private Task ExecuteAsync(int type, int? deviceId)
         {
             switch (type)
             {
-                case 0: _start(deviceId); break;
-                case 1: _stop(deviceId); break;
-                case 2: break;
-                case 4: _reload(); break;
+                case 0: return _start(deviceId);
+                case 1: return _stop(deviceId);
+                case 2: return Task.CompletedTask;
+                case 4: return _reload();
                 default: throw new NotSupportedException("当前WinForms版本暂不支持该远程命令。");
             }
         }
