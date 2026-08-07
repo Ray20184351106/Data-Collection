@@ -25,6 +25,9 @@ namespace MachineDataAcquisitionSystem.Models
         public string LogLevel { get; set; } = "信息";
         public int LogRetentionDays { get; set; } = 30;
 
+        // AI 仅用于填充声明式映射草稿，不拥有保存、执行或发布权限。
+        public AiMappingConfig AiMapping { get; set; } = new AiMappingConfig();
+
         // 高级配置
         public bool AutoStart { get; set; } = false;
         public bool AutoStartMonitor { get; set; } = false;

@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 using MachineDataAcquisitionSystem.Core;
+using MachineDataAcquisitionSystem.Core.Mapping;
 using MachineDataAcquisitionSystem.Models;
 using System.Threading.Tasks;
 using MachineDataAcquisitionSystem.Core.Parser.Core;
@@ -790,6 +791,7 @@ namespace MachineDataAcquisitionSystem
             bool acquisitionCommitted = false;
             int recordCount = 0;
             string errorMsg = null;
+            long? parserVersionId = null;
             BatchItem batchItem = null;
             SemaphoreSlim deviceProcessingLimit = null;
             bool deviceProcessingLimitAcquired = false;
@@ -852,7 +854,15 @@ namespace MachineDataAcquisitionSystem
                     return;
                 }
 
+                string currentModelHash = new ModelSchemaService(DatabaseHelper.GetConnectionString())
+                    .ComputeHash(script.ModelId);
+                if (!string.Equals(currentModelHash, script.ModelSchemaHash, StringComparison.Ordinal))
+                    throw new InvalidOperationException("关联模型结构已变化，当前发布规则必须重新验证后才能采集。");
+
                 AddLog($"[机台{machineId}] 找到脚本: {script.Name} (模型ID: {script.ModelId})", LogLevel.Success);
+                parserVersionId = script.ParserVersionId.HasValue && script.ParserVersionId.Value > 0
+                    ? script.ParserVersionId
+                    : null;
                 UpdateQueueStatus(machineId, fileName, "处理中", 50);
 
                 // ========== 3. 执行脚本 ==========
@@ -860,9 +870,15 @@ namespace MachineDataAcquisitionSystem
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    model = ScriptEngine.Execute(script.ScriptCode, filePath, machineId, script.ModelId);
+                    model = ScriptEngine.Execute(script, filePath, machineId);
                     cancellationToken.ThrowIfCancellationRequested();
-                    recordCount = 1; // 脚本返回一个模型对象
+                    if (model == null)
+                        throw new InvalidOperationException("解析规则返回了空结果。");
+                    if (!string.IsNullOrWhiteSpace(script.TargetModelType) &&
+                        !string.Equals(model.GetType().Name, script.TargetModelType, StringComparison.Ordinal) &&
+                        !string.Equals(model.GetType().FullName, script.TargetModelType, StringComparison.Ordinal))
+                        throw new InvalidOperationException("解析结果类型与规则关联模型不一致。");
+                    recordCount = 1;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -1009,7 +1025,7 @@ namespace MachineDataAcquisitionSystem
                 else
                 {
                     // ========== 保存处理记录到 SQLite 本地数据库 ==========
-                    SaveProcessRecord(machineId, fileName, isSuccess, recordCount, errorMsg, startTime);
+                    SaveProcessRecord(machineId, fileName, isSuccess, recordCount, errorMsg, startTime, parserVersionId);
                     AddLog($"[机台{machineId}] 文件 {fileName} 处理完成", LogLevel.Info);
                 }
             }
@@ -1289,24 +1305,37 @@ namespace MachineDataAcquisitionSystem
         }
 
         // 添加日志写入队列
-        private static BlockingCollection<string> _logDbQueue = new BlockingCollection<string>();
-        private static bool _isLogDbRunning = true;
+        private static BlockingCollection<ProcessRecordWrite> _logDbQueue = new BlockingCollection<ProcessRecordWrite>();
+        private Task _logDbWriterTask;
 
         // 在构造函数中启动后台写入线程
         private void InitLogDbWriter()
         {
-            Task.Run(() =>
+            _logDbWriterTask = Task.Run(() =>
             {
                 using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
                 {
                     conn.Open();
-                    while (_isLogDbRunning)
+                    foreach (ProcessRecordWrite record in _logDbQueue.GetConsumingEnumerable())
                     {
                         try
                         {
-                            string sql = _logDbQueue.Take();
+                            const string sql = @"
+INSERT INTO FileProcessRecord
+    (MachineId, FileName, Status, RecordCount, ErrorMsg, ProcessTime, Duration, ParserVersionId)
+VALUES
+    (@MachineId, @FileName, @Status, @RecordCount, @ErrorMsg, @ProcessTime, @Duration, @ParserVersionId);";
                             using (var cmd = new SQLiteCommand(sql, conn))
                             {
+                                cmd.Parameters.AddWithValue("@MachineId", record.MachineId);
+                                cmd.Parameters.AddWithValue("@FileName", record.FileName);
+                                cmd.Parameters.AddWithValue("@Status", record.Status);
+                                cmd.Parameters.AddWithValue("@RecordCount", record.RecordCount);
+                                cmd.Parameters.AddWithValue("@ErrorMsg", (object)record.ErrorMsg ?? DBNull.Value);
+                                cmd.Parameters.AddWithValue("@ProcessTime", record.ProcessTime);
+                                cmd.Parameters.AddWithValue("@Duration", record.Duration);
+                                cmd.Parameters.AddWithValue("@ParserVersionId", (object)record.ParserVersionId ?? DBNull.Value);
+                                cmd.CommandTimeout = 5;
                                 cmd.ExecuteNonQuery();
                             }
                         }
@@ -1322,20 +1351,31 @@ namespace MachineDataAcquisitionSystem
         /// <summary>
         /// 保存文件处理记录到 SQLite 数据库
         /// </summary>
-        private void SaveProcessRecord(int machineId, string fileName, bool success, int recordCount, string errorMsg, DateTime startTime)
+        private void SaveProcessRecord(
+            int machineId,
+            string fileName,
+            bool success,
+            int recordCount,
+            string errorMsg,
+            DateTime startTime,
+            long? parserVersionId)
         {
             try
             {
                 int duration = (int)(DateTime.Now - startTime).TotalMilliseconds;
                 string status = success ? "成功" : "失败";
 
-                // 构建 SQL（不使用参数，因为队列中无法共享连接）
-                string sql = $@"
-            INSERT INTO FileProcessRecord (MachineId, FileName, Status, RecordCount, ErrorMsg, ProcessTime, Duration)
-            VALUES ({machineId}, '{fileName.Replace("'", "''")}', '{status}', {recordCount}, '{errorMsg?.Replace("'", "''") ?? ""}', '{DateTime.Now:yyyy-MM-dd HH:mm:ss}', {duration})";
-
-                // 加入队列，不直接写入
-                _logDbQueue.Add(sql);
+                _logDbQueue.Add(new ProcessRecordWrite
+                {
+                    MachineId = machineId,
+                    FileName = fileName,
+                    Status = status,
+                    RecordCount = recordCount,
+                    ErrorMsg = errorMsg,
+                    ProcessTime = DateTime.Now,
+                    Duration = duration,
+                    ParserVersionId = parserVersionId
+                });
 
                 AddLog($"[机台{machineId}] 处理记录已加入队列 (状态:{status}, 记录数:{recordCount}, 耗时:{duration}ms)", LogLevel.Info);
             }
@@ -1343,6 +1383,18 @@ namespace MachineDataAcquisitionSystem
             {
                 AddLog($"保存处理记录失败: {ex.Message}", LogLevel.Error);
             }
+        }
+
+        private sealed class ProcessRecordWrite
+        {
+            public int MachineId { get; set; }
+            public string FileName { get; set; }
+            public string Status { get; set; }
+            public int RecordCount { get; set; }
+            public string ErrorMsg { get; set; }
+            public DateTime ProcessTime { get; set; }
+            public int Duration { get; set; }
+            public long? ParserVersionId { get; set; }
         }
 
         /// <summary>
@@ -2037,9 +2089,12 @@ namespace MachineDataAcquisitionSystem
             try
             {
                 _remoteAgentBridge?.Dispose();
-                _isLogDbRunning = false;
                 await StopAllMachinesAsync();
                 await FlushRemainingData();
+                if (!_logDbQueue.IsAddingCompleted)
+                    _logDbQueue.CompleteAdding();
+                if (_logDbWriterTask != null)
+                    await _logDbWriterTask;
 
                 if (_batchTimer != null)
                 {

@@ -1,6 +1,8 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Data.SQLite;
 using System.IO;
+using MachineDataAcquisitionSystem.Core.Mapping;
 
 namespace MachineDataAcquisitionSystem.Helpers
 {
@@ -9,16 +11,22 @@ namespace MachineDataAcquisitionSystem.Helpers
         private static string DbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Data", "采集记录.db");
         private static string ConnectionString => $"Data Source={DbPath};Version=3;";
 
-        public static void Initialize()
+        public static void Initialize(IReadOnlyCollection<LegacyBindingChoice> legacyBindingChoices = null)
         {
             // 确保目录存在
             string dbDir = Path.GetDirectoryName(DbPath);
             if (!Directory.Exists(dbDir))
                 Directory.CreateDirectory(dbDir);
 
+            // 先做只读审计；有冲突时迁移器会在任何数据库写入前停止。
+            var migrator = new ParseRuleDatabaseMigrator(DbPath);
+            migrator.Migrate(legacyBindingChoices ?? new List<LegacyBindingChoice>());
+
             using (var conn = new SQLiteConnection(ConnectionString))
             {
                 conn.Open();
+                using (var transaction = conn.BeginTransaction())
+                {
 
                 string sql = @"
                     -- 文件处理记录表
@@ -125,20 +133,27 @@ namespace MachineDataAcquisitionSystem.Helpers
 
                 using (var cmd = new SQLiteCommand(sql, conn))
                 {
+                    cmd.Transaction = transaction;
                     cmd.ExecuteNonQuery();
                 }
 
                 // 插入默认基类字段
-                InsertDefaultBaseFields(conn);
+                InsertDefaultBaseFields(conn, transaction);
+                transaction.Commit();
+                }
             }
+
+            using (var store = new ParseRuleStore(DbPath))
+                store.Initialize();
         }
 
-        private static void InsertDefaultBaseFields(SQLiteConnection conn)
+        private static void InsertDefaultBaseFields(SQLiteConnection conn, SQLiteTransaction transaction)
         {
             // 检查是否已有数据
             string checkSql = "SELECT COUNT(*) FROM BaseFields";
             using (var cmd = new SQLiteCommand(checkSql, conn))
             {
+                cmd.Transaction = transaction;
                 int count = Convert.ToInt32(cmd.ExecuteScalar());
                 if (count > 0) return;
             }
@@ -160,10 +175,12 @@ namespace MachineDataAcquisitionSystem.Helpers
 
             using (var cmd = new SQLiteCommand(insertSql, conn))
             {
+                cmd.Transaction = transaction;
                 cmd.ExecuteNonQuery();
             }
         }
 
         public static string GetConnectionString() => ConnectionString;
+        public static string GetDatabasePath() => DbPath;
     }
 }

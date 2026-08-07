@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using MachineDataAcquisitionSystem.Core.Mapping;
 
 namespace MachineDataAcquisitionSystem.Models
 {
@@ -14,5 +15,12 @@ namespace MachineDataAcquisitionSystem.Models
         public string FileExtension { get; set; }
         public string ScriptCode { get; set; }
         public bool IsEnabled { get; set; }
+        public long? ParserVersionId { get; set; }
+        public string ContentSha256 { get; set; }
+        public string ModelSchemaHash { get; set; }
+        public ParseRuleType RuleType { get; set; }
+        public string TargetModelType { get; set; }
+        public string GeneratedModelCodeSnapshot { get; set; }
+        public string GeneratedModelCodeSha256 { get; set; }
     }
 }

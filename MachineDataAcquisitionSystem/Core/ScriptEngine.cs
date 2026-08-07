@@ -1,8 +1,10 @@
 ﻿using System;
 using System.CodeDom.Compiler;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Threading;
 using Microsoft.CSharp;
 using NPOI.XSSF.UserModel;
 using NPOI.HSSF.UserModel;
@@ -11,34 +13,108 @@ using Yitter.IdGenerator;
 using MachineDataAcquisitionSystem.Helpers;
 using System.Data.SQLite;
 using MachineDataAcquisitionSystem.Models;
+using MachineDataAcquisitionSystem.Core.Mapping;
 
 namespace MachineDataAcquisitionSystem.Core
 {
     public static class ScriptEngine
     {
-        // ========== 脚本缓存 ==========
-        private static Dictionary<string, object> _scriptCache = new Dictionary<string, object>();
-        private static object _cacheLock = new object();
+        public const string EngineAbiVersion = "1";
+
+        private static readonly ConcurrentDictionary<string, Lazy<CompiledScriptExecutor>> ScriptCache =
+            new ConcurrentDictionary<string, Lazy<CompiledScriptExecutor>>(StringComparer.Ordinal);
 
         public static object Execute(string scriptCode, string filePath, int machineId, int modelId)
         {
-            // 生成缓存键（脚本代码哈希 + 模型ID）
-            string cacheKey = $"{modelId}_{scriptCode.GetHashCode()}";
+            ValidateExecutionInput(scriptCode, modelId);
+            return Compile(scriptCode, modelId, null).Execute(filePath, machineId);
+        }
 
-            // ========== 1. 检查缓存 ==========
-            if (_scriptCache.TryGetValue(cacheKey, out object cachedExecutor))
+        public static object Execute(ParseScript script, string filePath, int machineId)
+        {
+            if (script == null)
             {
-                System.Diagnostics.Debug.WriteLine($"使用缓存的脚本执行器: {cacheKey}");
-
-                // cachedExecutor 是 ScriptExecutor 的实例
-                var methods = cachedExecutor.GetType().GetMethod("Execute");
-                return methods.Invoke(cachedExecutor, new object[] { filePath, machineId });
+                throw new ArgumentNullException(nameof(script));
             }
 
-            System.Diagnostics.Debug.WriteLine($"编译新脚本: {cacheKey}");
+            ValidateExecutionInput(script.ScriptCode, script.ModelId);
+            if (!script.ParserVersionId.HasValue)
+            {
+                return Compile(script.ScriptCode, script.ModelId, null).Execute(filePath, machineId);
+            }
+
+            if (script.ParserVersionId.Value <= 0)
+            {
+                throw new InvalidOperationException("The parse-rule version id is invalid.");
+            }
+            if (!script.IsEnabled)
+            {
+                throw new InvalidOperationException("A versioned parse rule must be published and enabled before execution.");
+            }
+            if (string.IsNullOrWhiteSpace(script.ContentSha256) ||
+                string.IsNullOrWhiteSpace(script.ModelSchemaHash))
+            {
+                throw new InvalidOperationException("The published parse-rule cache metadata is incomplete.");
+            }
+            if (string.IsNullOrWhiteSpace(script.GeneratedModelCodeSnapshot) ||
+                string.IsNullOrWhiteSpace(script.GeneratedModelCodeSha256) ||
+                !string.Equals(
+                    MappingRuleSerializer.Sha256(script.GeneratedModelCodeSnapshot),
+                    script.GeneratedModelCodeSha256,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The generated model source snapshot is missing or invalid.");
+            if (!Enum.IsDefined(
+                typeof(MachineDataAcquisitionSystem.Core.Mapping.ParseRuleType),
+                script.RuleType))
+            {
+                throw new InvalidOperationException("The parse-rule type is invalid.");
+            }
+
+            string cacheKey = BuildCacheKey(script);
+            string versionedScriptCode = script.ScriptCode;
+            int versionedModelId = script.ModelId;
+            string versionedModelCode = script.GeneratedModelCodeSnapshot;
+            Lazy<CompiledScriptExecutor> lazyExecutor = ScriptCache.GetOrAdd(
+                cacheKey,
+                _ => new Lazy<CompiledScriptExecutor>(
+                    () => Compile(versionedScriptCode, versionedModelId, versionedModelCode),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            CompiledScriptExecutor executor;
+            try
+            {
+                executor = lazyExecutor.Value;
+            }
+            catch
+            {
+                Lazy<CompiledScriptExecutor> removed;
+                ScriptCache.TryRemove(cacheKey, out removed);
+                throw;
+            }
+
+            return executor.Execute(filePath, machineId);
+        }
+
+        /// <summary>
+        /// Compiles a generated script without executing it or adding it to the runtime cache.
+        /// Mapping validation uses this after the side-effect-free Excel preview succeeds.
+        /// </summary>
+        public static void ValidateCompilation(string scriptCode, int modelId)
+        {
+            ValidateExecutionInput(scriptCode, modelId);
+            Compile(scriptCode, modelId, null);
+        }
+
+        private static CompiledScriptExecutor Compile(
+            string scriptCode,
+            int modelId,
+            string generatedModelCodeSnapshot)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                string.Format(CultureInfo.InvariantCulture, "Compiling parse script for model {0}.", modelId));
 
             // 读取 GeneratedModels 文件夹中的所有 .cs 文件
-            string generatedModelsCode = GetGeneratedModelsCode(modelId);
+            string generatedModelsCode = generatedModelCodeSnapshot ?? GetGeneratedModelsCode(modelId);
 
             // 构建完整类代码
             string fullCode = $@"
@@ -134,22 +210,21 @@ namespace MachineDataAcquisitionSystem.Core
                 throw new Exception($"脚本编译失败: {errors}");
             }
 
-            // 执行
             var assembly = result.CompiledAssembly;
             var type = assembly.GetType("ScriptNamespace.ScriptExecutor");
-            var instance = Activator.CreateInstance(type);
-            var method = type.GetMethod("Execute");
-
-            // ========== 2. 存入缓存 ==========
-            lock (_cacheLock)
+            if (type == null)
             {
-                if (!_scriptCache.ContainsKey(cacheKey))
-                {
-                    _scriptCache[cacheKey] = instance;
-                }
+                throw new InvalidOperationException("The compiled script executor type was not found.");
             }
 
-            return method.Invoke(instance, new object[] { filePath, machineId });
+            var instance = Activator.CreateInstance(type);
+            var method = type.GetMethod("Execute");
+            if (method == null)
+            {
+                throw new InvalidOperationException("The compiled script executor method was not found.");
+            }
+
+            return new CompiledScriptExecutor(instance, method);
         }
 
         /// <summary>
@@ -157,10 +232,30 @@ namespace MachineDataAcquisitionSystem.Core
         /// </summary>
         public static void ClearCache()
         {
-            lock (_cacheLock)
+            ScriptCache.Clear();
+            System.Diagnostics.Debug.WriteLine("脚本缓存已清除");
+        }
+
+        /// <summary>
+        /// 清除指定发布版本的脚本缓存。
+        /// </summary>
+        public static void ClearCache(long versionId)
+        {
+            if (versionId <= 0)
             {
-                _scriptCache.Clear();
-                System.Diagnostics.Debug.WriteLine("脚本缓存已清除");
+                throw new ArgumentOutOfRangeException(nameof(versionId), "Version id must be positive.");
+            }
+
+            string prefix = versionId.ToString(CultureInfo.InvariantCulture) + "|";
+            foreach (string cacheKey in ScriptCache.Keys)
+            {
+                if (!cacheKey.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                Lazy<CompiledScriptExecutor> removed;
+                ScriptCache.TryRemove(cacheKey, out removed);
             }
         }
 
@@ -169,14 +264,52 @@ namespace MachineDataAcquisitionSystem.Core
         /// </summary>
         public static void ClearCache(int modelId, string scriptCode)
         {
-            string cacheKey = $"{modelId}_{scriptCode.GetHashCode()}";
-            lock (_cacheLock)
+            // Unversioned compatibility executions are deliberately not cached.
+            // Clearing all versioned entries preserves the historical guarantee
+            // that no previously compiled executor remains after this call.
+            ClearCache();
+        }
+
+        private static string BuildCacheKey(ParseScript script)
+        {
+            return string.Concat(
+                script.ParserVersionId.Value.ToString(CultureInfo.InvariantCulture),
+                "|",
+                script.ContentSha256,
+                "|",
+                script.ModelSchemaHash,
+                "|",
+                EngineAbiVersion,
+                "|",
+                script.GeneratedModelCodeSha256);
+        }
+
+        private static void ValidateExecutionInput(string scriptCode, int modelId)
+        {
+            if (string.IsNullOrWhiteSpace(scriptCode))
             {
-                if (_scriptCache.ContainsKey(cacheKey))
-                {
-                    _scriptCache.Remove(cacheKey);
-                    System.Diagnostics.Debug.WriteLine($"清除脚本缓存: {cacheKey}");
-                }
+                throw new ArgumentException("Script code is required.", nameof(scriptCode));
+            }
+            if (modelId <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(modelId), "Model id must be positive.");
+            }
+        }
+
+        private sealed class CompiledScriptExecutor
+        {
+            private readonly object _instance;
+            private readonly MethodInfo _method;
+
+            public CompiledScriptExecutor(object instance, MethodInfo method)
+            {
+                _instance = instance ?? throw new ArgumentNullException(nameof(instance));
+                _method = method ?? throw new ArgumentNullException(nameof(method));
+            }
+
+            public object Execute(string filePath, int machineId)
+            {
+                return _method.Invoke(_instance, new object[] { filePath, machineId });
             }
         }
 
@@ -208,34 +341,39 @@ namespace MachineDataAcquisitionSystem.Core
                     }
                 }
 
-                // 2. 读取对应的 Model 文件
-                string modelsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GeneratedModels");
-                string modelFile = Path.Combine(modelsDir, $"{modelName}.cs");
-
-                if (!File.Exists(modelFile))
-                {
-                    return "";
-                }
-
-                string content = File.ReadAllText(modelFile);
-
-                // 3. 提取 public class 开始的内容
-                int classStart = content.IndexOf("public class");
-                if (classStart < 0)
-                {
-                    return "";
-                }
-
-                // 找到匹配的结束大括号
-                string classCode = ExtractClassBody(content, classStart);
-
-                return classCode;
+                // 2. Capture the exact source that this execution will compile.
+                return CaptureGeneratedModelCode(modelName);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"获取Model代码失败: {ex.Message}");
                 return "";
             }
+        }
+
+        public static string CaptureGeneratedModelCode(string modelName)
+        {
+            if (!MappingRuleSerializer.IsIdentifier(modelName))
+                throw new InvalidOperationException("The generated model name is invalid.");
+
+            string modelsDir = Path.GetFullPath(Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "GeneratedModels"));
+            string modelFile = Path.GetFullPath(Path.Combine(modelsDir, modelName + ".cs"));
+            string prefix = modelsDir.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!modelFile.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) || !File.Exists(modelFile))
+                throw new InvalidOperationException("The generated model source file does not exist.");
+
+            string content = File.ReadAllText(modelFile);
+            int classStart = content.IndexOf("public class", StringComparison.Ordinal);
+            if (classStart < 0)
+                throw new InvalidOperationException("The generated model source does not contain a public class.");
+            string classCode = ExtractClassBody(content, classStart);
+            if (string.IsNullOrWhiteSpace(classCode))
+                throw new InvalidOperationException("The generated model class could not be extracted.");
+            return classCode;
         }
 
         /// <summary>

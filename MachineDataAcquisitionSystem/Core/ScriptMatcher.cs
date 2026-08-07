@@ -1,6 +1,9 @@
 ﻿using System;
+using System.Data;
 using System.Data.SQLite;
+using System.Globalization;
 using System.IO;
+using MachineDataAcquisitionSystem.Core.Mapping;
 using MachineDataAcquisitionSystem.Helpers;
 using MachineDataAcquisitionSystem.Models;
 
@@ -10,45 +13,192 @@ namespace MachineDataAcquisitionSystem.Core
     {
         public static ParseScript Match(int machineId, string filePath)
         {
-            string extension = Path.GetExtension(filePath).ToLower();
-
-            using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+            if (machineId <= 0)
             {
-                conn.Open();
+                throw new ArgumentOutOfRangeException(nameof(machineId), "Machine id must be positive.");
+            }
 
-                string sql = @"
-                    SELECT s.Id, s.Name, s.ModelId, s.FileExtension, s.ScriptCode, s.IsEnabled
-                    FROM ParseScripts s
-                    INNER JOIN ScriptMachines sm ON s.Id = sm.ScriptId
-                    WHERE s.IsEnabled = 1 
-                      AND s.FileExtension = @Extension
-                      AND sm.MachineId = @MachineId
-                    LIMIT 1";
+            string extension = NormalizeExtension(filePath);
 
-                using (var cmd = new SQLiteCommand(sql, conn))
+            try
+            {
+                using (var connection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
                 {
-                    cmd.Parameters.AddWithValue("@Extension", extension);
-                    cmd.Parameters.AddWithValue("@MachineId", machineId);
+                    connection.Open();
 
-                    using (var reader = cmd.ExecuteReader())
+                    const string sql = @"
+SELECT
+    b.ParseRuleVersionId,
+    v.DefinitionId,
+    v.Status,
+    v.RuleType,
+    v.DefinitionJson,
+    v.DerivedScriptCode,
+    v.ContentSha256,
+    v.ModelSchemaHash,
+    d.RuleName,
+    d.ModelId,
+    d.TargetModelType,
+    d.NormalizedExtension
+FROM PublishedParseRuleBindings b
+LEFT JOIN ParseRuleVersions v ON v.Id = b.ParseRuleVersionId
+LEFT JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
+WHERE b.MachineId = @MachineId
+  AND b.NormalizedExtension = @NormalizedExtension;";
+
+                    using (var command = new SQLiteCommand(sql, connection))
                     {
-                        if (reader.Read())
+                        command.Parameters.Add("@MachineId", DbType.String).Value =
+                            machineId.ToString(CultureInfo.InvariantCulture);
+                        command.Parameters.Add("@NormalizedExtension", DbType.String).Value = extension;
+
+                        using (var reader = command.ExecuteReader())
                         {
-                            return new ParseScript
+                            if (!reader.Read())
                             {
-                                Id = reader.GetInt32(0),
-                                Name = reader.GetString(1),
-                                ModelId = reader.GetInt32(2),
-                                FileExtension = reader.GetString(3),
-                                ScriptCode = reader.GetString(4),
-                                IsEnabled = reader.GetInt32(5) == 1
-                            };
+                                return null;
+                            }
+
+                            ParseScript script = ReadPublishedScript(reader, extension);
+                            if (reader.Read())
+                            {
+                                throw new InvalidOperationException(
+                                    "More than one published parse-rule binding exists for the same machine and extension.");
+                            }
+
+                            return script;
                         }
                     }
                 }
             }
+            catch (SQLiteException ex)
+            {
+                throw new InvalidOperationException(
+                    string.Format(
+                        CultureInfo.InvariantCulture,
+                        "Failed to resolve the published parse rule for machine {0} and extension '{1}'.",
+                        machineId,
+                        extension),
+                    ex);
+            }
+        }
 
-            return null;
+        private static ParseScript ReadPublishedScript(SQLiteDataReader reader, string requestedExtension)
+        {
+            if (reader.IsDBNull(0) || reader.IsDBNull(1) || reader.IsDBNull(2) ||
+                reader.IsDBNull(3) || reader.IsDBNull(4) || reader.IsDBNull(5) ||
+                reader.IsDBNull(6) || reader.IsDBNull(7) || reader.IsDBNull(8) ||
+                reader.IsDBNull(9) || reader.IsDBNull(10) || reader.IsDBNull(11))
+            {
+                throw new InvalidOperationException(
+                    "The published parse-rule binding has missing version or definition data.");
+            }
+
+            long versionId = reader.GetInt64(0);
+            long definitionId = reader.GetInt64(1);
+            int status = reader.GetInt32(2);
+            int ruleTypeValue = reader.GetInt32(3);
+            string definitionJson = reader.GetString(4);
+            string scriptCode = reader.GetString(5);
+            string contentSha256 = reader.GetString(6);
+            string modelSchemaHash = reader.GetString(7);
+            string ruleName = reader.GetString(8);
+            int modelId = reader.GetInt32(9);
+            string targetModelType = reader.GetString(10);
+            string normalizedExtension = reader.GetString(11);
+
+            if (versionId <= 0)
+            {
+                throw new InvalidOperationException("The published parse-rule version id is invalid.");
+            }
+            if (status != (int)ParseRuleStatus.Published)
+            {
+                throw new InvalidOperationException(
+                    "The published parse-rule binding points to a version that is not published.");
+            }
+            if (!Enum.IsDefined(typeof(ParseRuleType), ruleTypeValue))
+            {
+                throw new InvalidOperationException("The published parse-rule type is invalid.");
+            }
+            if (modelId <= 0 || string.IsNullOrWhiteSpace(ruleName) ||
+                string.IsNullOrWhiteSpace(targetModelType))
+            {
+                throw new InvalidOperationException("The published parse-rule definition is incomplete.");
+            }
+            if (string.IsNullOrWhiteSpace(scriptCode) || string.IsNullOrWhiteSpace(contentSha256) ||
+                string.IsNullOrWhiteSpace(modelSchemaHash))
+            {
+                throw new InvalidOperationException("The published parse-rule version metadata is incomplete.");
+            }
+            if (!string.Equals(normalizedExtension, requestedExtension, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "The published parse-rule definition extension does not match its binding.");
+            }
+
+            var version = new ParseRuleVersion
+            {
+                Id = versionId,
+                DefinitionId = definitionId,
+                Status = (ParseRuleStatus)status,
+                RuleType = (ParseRuleType)ruleTypeValue,
+                DefinitionJson = definitionJson,
+                DerivedScriptCode = scriptCode,
+                ContentSha256 = contentSha256,
+                ModelSchemaHash = modelSchemaHash,
+                RuleName = ruleName,
+                ModelId = modelId,
+                TargetModelType = targetModelType,
+                NormalizedExtension = normalizedExtension
+            };
+            ParseRuleIntegrityValidator.Validate(version);
+
+            var result = new ParseScript
+            {
+                Id = versionId <= int.MaxValue ? (int)versionId : 0,
+                Name = ruleName,
+                ModelId = modelId,
+                FileExtension = normalizedExtension,
+                ScriptCode = scriptCode,
+                IsEnabled = true,
+                ParserVersionId = versionId,
+                ContentSha256 = contentSha256,
+                ModelSchemaHash = modelSchemaHash,
+                RuleType = (ParseRuleType)ruleTypeValue,
+                TargetModelType = targetModelType
+            };
+            return CaptureModelSourceSnapshot(result);
+        }
+
+        public static ParseScript CaptureModelSourceSnapshot(ParseScript script)
+        {
+            if (script == null)
+            {
+                throw new ArgumentNullException(nameof(script));
+            }
+            if (script.ParserVersionId.HasValue && script.ParserVersionId.Value > 0)
+            {
+                string source = ScriptEngine.CaptureGeneratedModelCode(script.TargetModelType);
+                script.GeneratedModelCodeSnapshot = source;
+                script.GeneratedModelCodeSha256 = MappingRuleSerializer.Sha256(source);
+            }
+            return script;
+        }
+
+        private static string NormalizeExtension(string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                throw new ArgumentException("File path is required.", nameof(filePath));
+            }
+
+            string extension = Path.GetExtension(filePath);
+            if (string.IsNullOrWhiteSpace(extension))
+            {
+                throw new ArgumentException("File path must include an extension.", nameof(filePath));
+            }
+
+            return extension.Trim().ToLowerInvariant();
         }
     }
 }

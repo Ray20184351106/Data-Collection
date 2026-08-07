@@ -15,9 +15,15 @@
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <Deterministic>true</Deterministic>
+    <!-- Keep old-style .NET Framework resource generation compatible with dotnet test's x64 MSBuild host. -->
+    <GenerateResourceMSBuildArchitecture>CurrentArchitecture</GenerateResourceMSBuildArchitecture>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
+  </ItemGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <PlatformTarget>AnyCPU</PlatformTarget>
     <DebugSymbols>true</DebugSymbols>
@@ -38,6 +44,10 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.Resources.Extensions">
+      <HintPath>$(NuGetPackageRoot)system.resources.extensions\8.0.0\lib\net462\System.Resources.Extensions.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
     <Reference Include="BouncyCastle.Cryptography, Version=2.0.0.0, Culture=neutral, PublicKeyToken=072edcf4a5328938, processorArchitecture=MSIL">
       <HintPath>..\packages\BouncyCastle.Cryptography.2.6.2\lib\net461\BouncyCastle.Cryptography.dll</HintPath>
     </Reference>
@@ -159,6 +169,18 @@
     <Compile Include="Core\FileWatcher.cs" />
     <Compile Include="Core\Machine.cs" />
     <Compile Include="Core\MachineManager.cs" />
+    <Compile Include="Core\Mapping\AiMappingResponseValidator.cs" />
+    <Compile Include="Core\Mapping\AiMappingClient.cs" />
+    <Compile Include="Core\Mapping\ExcelMappingPreviewService.cs" />
+    <Compile Include="Core\Mapping\LegacyScriptVersionService.cs" />
+    <Compile Include="Core\Mapping\MappingContracts.cs" />
+    <Compile Include="Core\Mapping\MappingRuleSerializer.cs" />
+    <Compile Include="Core\Mapping\MappingRuntime.cs" />
+    <Compile Include="Core\Mapping\MappingScriptGenerator.cs" />
+    <Compile Include="Core\Mapping\ModelSchemaService.cs" />
+    <Compile Include="Core\Mapping\ParseRuleStore.cs" />
+    <Compile Include="Core\Mapping\ParseRuleDatabaseMigrator.cs" />
+    <Compile Include="Core\Mapping\ParseRuleIntegrityValidator.cs" />
     <Compile Include="Core\Monitor\FileMonitor.cs" />
     <Compile Include="Core\Parser\IParser.cs" />
     <Compile Include="Core\Parser\JsonParser.cs" />
@@ -191,8 +213,14 @@
     <Compile Include="Forms\LogViewerForm.Designer.cs">
       <DependentUpon>LogViewerForm.cs</DependentUpon>
     </Compile>
+    <Compile Include="Forms\LegacyMigrationConflictDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
     <Compile Include="Forms\ModelConfigForm.cs">
       <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\ModelConfigForm.Mapping.cs">
+      <DependentUpon>ModelConfigForm.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\ModelConfigForm.Designer.cs">
       <DependentUpon>ModelConfigForm.cs</DependentUpon>
@@ -211,6 +239,7 @@
     <Compile Include="Helpers\RemoteAgentBridge.cs" />
     <Compile Include="Helpers\SettingsHelper.cs" />
     <Compile Include="Models\AppSettings.cs" />
+    <Compile Include="Models\AiMappingConfig.cs" />
     <Compile Include="Models\DatabaseConfig.cs" />
     <Compile Include="Models\MachineConfig.cs" />
     <Compile Include="Models\MachineStatus.cs" />

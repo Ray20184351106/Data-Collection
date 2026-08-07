@@ -34,6 +34,8 @@ namespace MachineDataAcquisitionSystem.Helpers
             {
                 string json = File.ReadAllText(SettingsPath);
                 _settings = JsonConvert.DeserializeObject<AppSettings>(json) ?? new AppSettings();
+                if (_settings.AiMapping == null)
+                    _settings.AiMapping = new AiMappingConfig();
                 bool needsMigration = false;
                 if (_settings.Databases != null)
                 {
@@ -54,6 +56,13 @@ namespace MachineDataAcquisitionSystem.Helpers
                                 needsMigration = true;
                         }
                     }
+                }
+                if (!string.IsNullOrEmpty(_settings.AiMapping.ApiKey))
+                {
+                    if (_settings.AiMapping.ApiKey.StartsWith("dpapi:", StringComparison.Ordinal))
+                        _settings.AiMapping.ApiKey = Unprotect(_settings.AiMapping.ApiKey.Substring(6));
+                    else
+                        needsMigration = true;
                 }
                 if (needsMigration) SaveSettings(_settings);
                 return _settings;
@@ -85,6 +94,13 @@ namespace MachineDataAcquisitionSystem.Helpers
                         if (!string.IsNullOrEmpty(connectionString) && !connectionString.StartsWith("dpapi:", StringComparison.Ordinal))
                             item["ConnectionString"] = "dpapi:" + Protect(connectionString);
                     }
+                }
+                var aiMapping = document["AiMapping"] as JObject;
+                if (aiMapping != null)
+                {
+                    string apiKey = aiMapping.Value<string>("ApiKey");
+                    if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("dpapi:", StringComparison.Ordinal))
+                        aiMapping["ApiKey"] = "dpapi:" + Protect(apiKey);
                 }
                 string json = document.ToString(Formatting.Indented);
                 File.WriteAllText(SettingsPath, json);

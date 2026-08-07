@@ -22,6 +22,7 @@ namespace MachineDataAcquisitionSystem.Forms
         // ========== 数据库配置 ==========
         private List<DatabaseConfig> _databases;
         private DatabaseConfig _currentDatabase;
+        private PropertyGrid _aiMappingPropertyGrid;
 
         public ConfigForm()
         {
@@ -94,6 +95,25 @@ namespace MachineDataAcquisitionSystem.Forms
 
             // ========== 加载数据库配置 ==========
             LoadDatabases();
+            LoadAiMappingSettings();
+        }
+
+        private void LoadAiMappingSettings()
+        {
+            if (_appSettings.AiMapping == null)
+                _appSettings.AiMapping = new AiMappingConfig();
+            if (_aiMappingPropertyGrid == null)
+            {
+                _aiMappingPropertyGrid = new PropertyGrid
+                {
+                    Dock = DockStyle.Fill,
+                    HelpVisible = true,
+                    ToolbarVisible = false,
+                    PropertySort = PropertySort.Categorized
+                };
+                tabPage5.Controls.Add(_aiMappingPropertyGrid);
+            }
+            _aiMappingPropertyGrid.SelectedObject = _appSettings.AiMapping;
         }
 
 

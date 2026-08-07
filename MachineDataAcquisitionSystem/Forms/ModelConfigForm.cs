@@ -1,4 +1,5 @@
 ﻿using MachineDataAcquisitionSystem.Core;
+using MachineDataAcquisitionSystem.Core.Mapping;
 using MachineDataAcquisitionSystem.Helpers;
 using System;
 using System.Collections.Generic;
@@ -27,6 +28,7 @@ namespace MachineDataAcquisitionSystem.Forms
         public ModelConfigForm()
         {
             InitializeComponent();
+            InitializeMappingUi();
 
             // 绑定事件
             this.Load += ModelConfigForm_Load;
@@ -210,77 +212,24 @@ namespace MachineDataAcquisitionSystem.Forms
             }
 
             int modelId = ((ModelItem)cmbScriptModel.SelectedItem).Id;
+            string targetModelType = ((ModelItem)cmbScriptModel.SelectedItem).Name;
             string fileExtension = cmbScriptFileType.SelectedItem?.ToString() ?? ".xlsx";
 
             try
             {
-                using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+                var service = new LegacyScriptVersionService(DatabaseHelper.GetDatabasePath());
+                LegacyScriptSaveResult saved = service.Save(new LegacyScriptSaveRequest
                 {
-                    conn.Open();
-
-                    if (_currentScriptId == -1)
-                    {
-                        // 新增脚本
-                        string sql = @"INSERT INTO ParseScripts (Name, ModelId, FileExtension, ScriptCode, IsEnabled)
-                               VALUES (@Name, @ModelId, @FileExtension, @ScriptCode, @IsEnabled)";
-                        using (var cmd = new SQLiteCommand(sql, conn))
-                        {
-                            cmd.Parameters.AddWithValue("@Name", txtScriptName.Text);
-                            cmd.Parameters.AddWithValue("@ModelId", modelId);
-                            cmd.Parameters.AddWithValue("@FileExtension", fileExtension);
-                            cmd.Parameters.AddWithValue("@ScriptCode", rtxtScriptCode.Text);
-                            cmd.Parameters.AddWithValue("@IsEnabled", chkScriptEnabled.Checked ? 1 : 0);
-                            cmd.ExecuteNonQuery();
-                        }
-
-                        // 获取新ID
-                        using (var cmd = new SQLiteCommand("SELECT last_insert_rowid()", conn))
-                        {
-                            _currentScriptId = Convert.ToInt32(cmd.ExecuteScalar());
-                        }
-                    }
-                    else
-                    {
-                        // 更新脚本
-                        string sql = @"UPDATE ParseScripts SET Name = @Name, ModelId = @ModelId, FileExtension = @FileExtension, 
-                               ScriptCode = @ScriptCode, IsEnabled = @IsEnabled, UpdateTime = CURRENT_TIMESTAMP
-                               WHERE Id = @Id";
-                        using (var cmd = new SQLiteCommand(sql, conn))
-                        {
-                            cmd.Parameters.AddWithValue("@Id", _currentScriptId);
-                            cmd.Parameters.AddWithValue("@Name", txtScriptName.Text);
-                            cmd.Parameters.AddWithValue("@ModelId", modelId);
-                            cmd.Parameters.AddWithValue("@FileExtension", fileExtension);
-                            cmd.Parameters.AddWithValue("@ScriptCode", rtxtScriptCode.Text);
-                            cmd.Parameters.AddWithValue("@IsEnabled", chkScriptEnabled.Checked ? 1 : 0);
-                            cmd.ExecuteNonQuery();
-                        }
-
-                        // 删除旧的机台关联
-                        string delSql = "DELETE FROM ScriptMachines WHERE ScriptId = @ScriptId";
-                        using (var cmd = new SQLiteCommand(delSql, conn))
-                        {
-                            cmd.Parameters.AddWithValue("@ScriptId", _currentScriptId);
-                            cmd.ExecuteNonQuery();
-                        }
-                    }
-
-                    // 保存机台关联
-                    foreach (Control ctrl in flowLayoutMachines.Controls)
-                    {
-                        if (ctrl is CheckBox chk && chk.Tag is int && chk.Checked)
-                        {
-                            string insertSql = "INSERT INTO ScriptMachines (ScriptId, MachineId) VALUES (@ScriptId, @MachineId)";
-                            using (var cmd = new SQLiteCommand(insertSql, conn))
-                            {
-                                cmd.Parameters.AddWithValue("@ScriptId", _currentScriptId);
-                                cmd.Parameters.AddWithValue("@MachineId", (int)chk.Tag);
-                                cmd.ExecuteNonQuery();
-                            }
-                        }
-                    }
-                }
-                // 保存成功后，清除脚本缓存
+                    LegacyScriptId = _currentScriptId > 0 ? _currentScriptId : 0,
+                    Name = txtScriptName.Text,
+                    ModelId = modelId,
+                    TargetModelType = targetModelType,
+                    FileExtension = fileExtension,
+                    ScriptCode = rtxtScriptCode.Text,
+                    IsEnabled = chkScriptEnabled.Checked,
+                    MachineIds = GetSelectedMachineIds()
+                });
+                _currentScriptId = checked((int)saved.LegacyScriptId);
                 ScriptEngine.ClearCache();
                 MessageBox.Show("保存成功！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 
@@ -753,9 +702,39 @@ namespace MachineDataAcquisitionSystem.Forms
 
             try
             {
+            List<ModelSchemaField> proposedSchema = GetProposedModelSchema();
+            if (!MappingRuleSerializer.IsIdentifier(_currentModel.ModelName) ||
+                proposedSchema.Any(field => !MappingRuleSerializer.IsIdentifier(field.FieldName)) ||
+                proposedSchema.GroupBy(field => field.FieldName, StringComparer.Ordinal).Any(group => group.Count() > 1))
+            {
+                MessageBox.Show("模型名和字段名必须是唯一、合法的 C# 标识符。", "验证失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var schemaService = new ModelSchemaService(DatabaseHelper.GetConnectionString());
+
                 using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
                 {
                     conn.Open();
+                    using (var transaction = conn.BeginTransaction(System.Data.IsolationLevel.Serializable))
+                    {
+                    // Published-binding protection must share the same immediate write
+                    // transaction as the model update; otherwise another process could
+                    // publish a rule between the check and the schema write.
+                    bool hasPublishedRule = _currentModelId > 0 &&
+                        schemaService.HasPublishedBinding(conn, transaction, _currentModelId);
+                    bool publishedModelNameChanged = hasPublishedRule && !string.Equals(
+                        schemaService.LoadModelName(conn, transaction, _currentModelId),
+                        _currentModel.ModelName,
+                        StringComparison.Ordinal);
+                    bool publishedSchemaChanged = hasPublishedRule && ModelSchemaService.HasDestructiveChange(
+                        schemaService.LoadFields(conn, transaction, _currentModelId),
+                        proposedSchema);
+                    if (publishedModelNameChanged || publishedSchemaChanged)
+                    {
+                        throw new PublishedModelSchemaChangeException(
+                            "该模型存在已发布解析规则，不能直接修改模型名或任何会改变结构哈希的字段。请先新建模型并完成替代规则验证与切换。");
+                    }
 
                     // 保存模型
                     if (_currentModelId == -1)
@@ -764,6 +743,7 @@ namespace MachineDataAcquisitionSystem.Forms
                         string sql = "INSERT INTO DataModels (ModelName, TableName, ParentModelId, Description, IsActive) VALUES (@ModelName, @TableName, @ParentModelId, @Description, @IsActive)";
                         using (var cmd = new SQLiteCommand(sql, conn))
                         {
+                            cmd.Transaction = transaction;
                             cmd.Parameters.AddWithValue("@ModelName", _currentModel.ModelName);
                             cmd.Parameters.AddWithValue("@TableName", _currentModel.TableName);
                             cmd.Parameters.AddWithValue("@ParentModelId", _currentModel.ParentModelId);
@@ -775,6 +755,7 @@ namespace MachineDataAcquisitionSystem.Forms
                         // 获取新ID
                         using (var cmd = new SQLiteCommand("SELECT last_insert_rowid()", conn))
                         {
+                            cmd.Transaction = transaction;
                             _currentModelId = Convert.ToInt32(cmd.ExecuteScalar());
                             _currentModel.Id = _currentModelId;
                         }
@@ -785,6 +766,7 @@ namespace MachineDataAcquisitionSystem.Forms
                         string sql = "UPDATE DataModels SET ModelName = @ModelName, TableName = @TableName, ParentModelId = @ParentModelId, Description = @Description, IsActive = @IsActive WHERE Id = @Id";
                         using (var cmd = new SQLiteCommand(sql, conn))
                         {
+                            cmd.Transaction = transaction;
                             cmd.Parameters.AddWithValue("@Id", _currentModelId);
                             cmd.Parameters.AddWithValue("@ModelName", _currentModel.ModelName);
                             cmd.Parameters.AddWithValue("@TableName", _currentModel.TableName);
@@ -798,6 +780,7 @@ namespace MachineDataAcquisitionSystem.Forms
                         string delSql = "DELETE FROM ModelFields WHERE ModelId = @ModelId";
                         using (var cmd = new SQLiteCommand(delSql, conn))
                         {
+                            cmd.Transaction = transaction;
                             cmd.Parameters.AddWithValue("@ModelId", _currentModelId);
                             cmd.ExecuteNonQuery();
                         }
@@ -816,6 +799,7 @@ namespace MachineDataAcquisitionSystem.Forms
 
                         using (var cmd = new SQLiteCommand(sql, conn))
                         {
+                            cmd.Transaction = transaction;
                             cmd.Parameters.AddWithValue("@ModelId", _currentModelId);
                             cmd.Parameters.AddWithValue("@FieldName", fieldName);
                             cmd.Parameters.AddWithValue("@FieldType", row.Cells["colFieldType"].Value?.ToString() ?? "string");
@@ -826,6 +810,13 @@ namespace MachineDataAcquisitionSystem.Forms
                             cmd.Parameters.AddWithValue("@Description", row.Cells["colDescription"].Value?.ToString() ?? "");
                             cmd.ExecuteNonQuery();
                         }
+                    }
+                    schemaService.InvalidateUnpublishedValidation(
+                        conn,
+                        transaction,
+                        _currentModelId,
+                        ModelSchemaService.ComputeHash(proposedSchema));
+                    transaction.Commit();
                     }
                 }
                 // 保存成功后，生成 Model 类
@@ -856,10 +847,38 @@ namespace MachineDataAcquisitionSystem.Forms
                     }
                 }
             }
+            catch (PublishedModelSchemaChangeException ex)
+            {
+                // The transaction and connection have already been disposed here, so
+                // displaying a modal warning cannot hold SQLite's write lock.
+                MessageBox.Show(ex.Message, "已阻止破坏性修改", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
             catch (Exception ex)
             {
                 MessageBox.Show($"保存失败: {ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private List<ModelSchemaField> GetProposedModelSchema()
+        {
+            var fields = new List<ModelSchemaField>();
+            foreach (DataGridViewRow row in dgvFields.Rows)
+            {
+                if (row.IsNewRow) continue;
+                string fieldName = row.Cells["colFieldName"].Value?.ToString();
+                if (string.IsNullOrWhiteSpace(fieldName)) continue;
+                fields.Add(new ModelSchemaField
+                {
+                    FieldName = fieldName.Trim(),
+                    FieldType = row.Cells["colFieldType"].Value?.ToString() ?? "string",
+                    FieldLength = Convert.ToInt32(row.Cells["colFieldLength"].Value ?? 0),
+                    IsRequired = Convert.ToBoolean(row.Cells["colIsRequired"].Value ?? false),
+                    IsPrimaryKey = Convert.ToBoolean(row.Cells["colIsPrimaryKey"].Value ?? false),
+                    IsIdentity = Convert.ToBoolean(row.Cells["colIsIdentity"].Value ?? false),
+                    Description = row.Cells["colDescription"].Value?.ToString() ?? string.Empty
+                });
+            }
+            return fields;
         }
 
         /// <summary>
@@ -1423,6 +1442,13 @@ namespace MachineDataAcquisitionSystem.Forms
                 return model;";
 
             rtxtScriptCode.Text = template;
+        }
+
+        private sealed class PublishedModelSchemaChangeException : InvalidOperationException
+        {
+            public PublishedModelSchemaChangeException(string message) : base(message)
+            {
+            }
         }
     }
 
