@@ -1,6 +1,7 @@
 ﻿using MachineDataAcquisitionSystem.Helpers;
 using MachineDataAcquisitionSystem.Models;
 using MachineDataAcquisitionSystem.Core;
+using MachineDataAcquisitionSystem.Core.Mapping;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -9,6 +10,7 @@ using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace MachineDataAcquisitionSystem.Forms
@@ -24,6 +26,9 @@ namespace MachineDataAcquisitionSystem.Forms
         private List<DatabaseConfig> _databases;
         private DatabaseConfig _currentDatabase;
         private PropertyGrid _aiMappingPropertyGrid;
+        private Button _aiMappingSaveButton;
+        private Button _aiMappingTestButton;
+        private Label _aiMappingStatusLabel;
         private bool _configurationLoaded;
         private bool _configurationHasUnsavedEdits;
         private bool _reloadingConfiguration;
@@ -31,6 +36,7 @@ namespace MachineDataAcquisitionSystem.Forms
         public ConfigForm()
         {
             InitializeComponent();
+            InitializeAiMappingEditor();
 
             this.Load += ConfigForm_Load;
             this.Activated += ConfigForm_Activated;
@@ -59,6 +65,64 @@ namespace MachineDataAcquisitionSystem.Forms
             menuDelete.Click += menuDelete_Click;
             menuSetPrimary.Click += MenuSetPrimary_Click;
             menuTestConn.Click += btnTestConn_Click;
+        }
+
+        private void InitializeAiMappingEditor()
+        {
+            _aiMappingPropertyGrid = new PropertyGrid
+            {
+                Dock = DockStyle.Fill,
+                HelpVisible = true,
+                ToolbarVisible = false,
+                PropertySort = PropertySort.Categorized
+            };
+            _aiMappingPropertyGrid.PropertyValueChanged += AiMappingPropertyGrid_PropertyValueChanged;
+
+            _aiMappingSaveButton = new Button
+            {
+                AutoSize = true,
+                Height = 34,
+                Text = "保存 AI 配置"
+            };
+            _aiMappingTestButton = new Button
+            {
+                AutoSize = true,
+                Height = 34,
+                Text = "测试 AI 连接"
+            };
+            _aiMappingStatusLabel = new Label
+            {
+                AutoSize = true,
+                Margin = new Padding(12, 9, 0, 0),
+                ForeColor = Color.DimGray,
+                Text = "修改配置后请先保存或测试连接"
+            };
+
+            var actions = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.LeftToRight,
+                WrapContents = false,
+                Padding = new Padding(4)
+            };
+            actions.Controls.Add(_aiMappingSaveButton);
+            actions.Controls.Add(_aiMappingTestButton);
+            actions.Controls.Add(_aiMappingStatusLabel);
+
+            var layout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 2
+            };
+            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+            layout.Controls.Add(_aiMappingPropertyGrid, 0, 0);
+            layout.Controls.Add(actions, 0, 1);
+            tabPage5.Controls.Add(layout);
+
+            _aiMappingSaveButton.Click += AiMappingSaveButton_Click;
+            _aiMappingTestButton.Click += AiMappingTestButton_Click;
         }
 
         // ========== 路径配置方法 ==========
@@ -145,18 +209,87 @@ namespace MachineDataAcquisitionSystem.Forms
         {
             if (_appSettings.AiMapping == null)
                 _appSettings.AiMapping = new AiMappingConfig();
-            if (_aiMappingPropertyGrid == null)
-            {
-                _aiMappingPropertyGrid = new PropertyGrid
-                {
-                    Dock = DockStyle.Fill,
-                    HelpVisible = true,
-                    ToolbarVisible = false,
-                    PropertySort = PropertySort.Categorized
-                };
-                tabPage5.Controls.Add(_aiMappingPropertyGrid);
-            }
             _aiMappingPropertyGrid.SelectedObject = _appSettings.AiMapping;
+        }
+
+        private void AiMappingPropertyGrid_PropertyValueChanged(object sender, PropertyValueChangedEventArgs e)
+        {
+            if (!_reloadingConfiguration)
+            {
+                _configurationHasUnsavedEdits = true;
+                UpdateAiMappingStatus("AI 配置有未保存修改", Color.DarkOrange);
+            }
+        }
+
+        private void AiMappingSaveButton_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                AiMappingConfig config = GetCurrentAiMappingConfig();
+                OpenAiCompatibleMappingClient.ValidateOptions(config.ToClientOptions());
+                SettingsHelper.SaveAiMappingConfiguration(config);
+                UpdateAiMappingStatus("AI 配置保存成功", Color.DarkGreen);
+                MessageBox.Show(this, "AI 自动映射配置已保存。", "AI 配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                UpdateAiMappingStatus("AI 配置保存失败", Color.Firebrick);
+                MessageBox.Show(this, ex.Message, "AI 配置保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private async void AiMappingTestButton_Click(object sender, EventArgs e)
+        {
+            SetAiMappingActionsEnabled(false);
+            UpdateAiMappingStatus("正在测试 AI 连接...", Color.RoyalBlue);
+            try
+            {
+                AiMappingConfig config = GetCurrentAiMappingConfig();
+                AiConnectionTestResult result;
+                using (var tester = new AiMappingConnectionTester())
+                    result = await tester.TestAsync(config.ToClientOptions(), CancellationToken.None);
+
+                if (result.IsSuccess)
+                {
+                    UpdateAiMappingStatus("AI 连接成功", Color.DarkGreen);
+                    MessageBox.Show(this, "AI Endpoint 和模型连接成功。", "AI 连接测试", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    UpdateAiMappingStatus("AI 连接失败：" + result.ErrorCode, Color.Firebrick);
+                    MessageBox.Show(this, "AI 连接失败：" + result.ErrorCode, "AI 连接测试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                UpdateAiMappingStatus("AI 连接测试失败", Color.Firebrick);
+                MessageBox.Show(this, ex.Message, "AI 连接测试", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!IsDisposed && !Disposing)
+                    SetAiMappingActionsEnabled(true);
+            }
+        }
+
+        private AiMappingConfig GetCurrentAiMappingConfig()
+        {
+            if (_appSettings == null || _appSettings.AiMapping == null)
+                throw new InvalidOperationException("AI 配置尚未加载。");
+            return _appSettings.AiMapping;
+        }
+
+        private void SetAiMappingActionsEnabled(bool enabled)
+        {
+            _aiMappingSaveButton.Enabled = enabled;
+            _aiMappingTestButton.Enabled = enabled;
+            _aiMappingPropertyGrid.Enabled = enabled;
+        }
+
+        private void UpdateAiMappingStatus(string message, Color color)
+        {
+            _aiMappingStatusLabel.Text = message;
+            _aiMappingStatusLabel.ForeColor = color;
         }
 
 

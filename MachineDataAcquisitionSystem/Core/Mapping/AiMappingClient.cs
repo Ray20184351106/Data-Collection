@@ -43,6 +43,124 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public bool AllowPrivateNetworkHttp { get; set; }
     }
 
+    public sealed class AiConnectionTestResult
+    {
+        public bool IsSuccess { get; set; }
+        public string ErrorCode { get; set; }
+
+        public static AiConnectionTestResult Success()
+        {
+            return new AiConnectionTestResult { IsSuccess = true };
+        }
+
+        public static AiConnectionTestResult Failure(string errorCode)
+        {
+            return new AiConnectionTestResult { IsSuccess = false, ErrorCode = errorCode };
+        }
+    }
+
+    public sealed class AiMappingConnectionTester : IDisposable
+    {
+        private readonly HttpClient _httpClient;
+
+        public AiMappingConnectionTester()
+            : this(new HttpClient())
+        {
+        }
+
+        public AiMappingConnectionTester(HttpMessageHandler handler)
+            : this(new HttpClient(handler ?? throw new ArgumentNullException(nameof(handler))))
+        {
+        }
+
+        private AiMappingConnectionTester(HttpClient httpClient)
+        {
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
+        public async Task<AiConnectionTestResult> TestAsync(
+            AiMappingClientOptions options,
+            CancellationToken cancellationToken)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            var testOptions = new AiMappingClientOptions
+            {
+                Enabled = true,
+                Endpoint = options.Endpoint,
+                Model = options.Model,
+                ApiKey = options.ApiKey,
+                Timeout = options.Timeout,
+                AllowPrivateNetworkHttp = options.AllowPrivateNetworkHttp
+            };
+            OpenAiCompatibleMappingClient.ValidateOptions(testOptions);
+
+            string requestJson = JsonConvert.SerializeObject(new
+            {
+                model = testOptions.Model,
+                temperature = 0,
+                messages = new[]
+                {
+                    new { role = "user", content = "Reply with OK." }
+                }
+            }, Formatting.None);
+
+            using (var message = new HttpRequestMessage(HttpMethod.Post, testOptions.Endpoint))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                linked.CancelAfter(testOptions.Timeout);
+                message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                if (!string.IsNullOrWhiteSpace(testOptions.ApiKey))
+                    message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", testOptions.ApiKey);
+                message.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
+
+                try
+                {
+                    using (HttpResponseMessage response = await _httpClient.SendAsync(
+                        message,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        linked.Token).ConfigureAwait(false))
+                    {
+                        if (response.StatusCode == (HttpStatusCode)429)
+                            return AiConnectionTestResult.Failure("AI_RATE_LIMITED");
+                        if (!response.IsSuccessStatusCode)
+                            return AiConnectionTestResult.Failure("AI_HTTP_ERROR_" + (int)response.StatusCode);
+                        try
+                        {
+                            string body = await OpenAiCompatibleMappingClient.ReadBoundedAsync(
+                                response.Content,
+                                linked.Token).ConfigureAwait(false);
+                            JObject root = JObject.Parse(body);
+                            if (root["choices"] == null || root["choices"].Type != JTokenType.Array)
+                                return AiConnectionTestResult.Failure("INVALID_AI_RESPONSE");
+                            return AiConnectionTestResult.Success();
+                        }
+                        catch (JsonException)
+                        {
+                            return AiConnectionTestResult.Failure("INVALID_AI_RESPONSE");
+                        }
+                        catch (AiMappingClientException)
+                        {
+                            return AiConnectionTestResult.Failure("INVALID_AI_RESPONSE");
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return AiConnectionTestResult.Failure("AI_TIMEOUT");
+                }
+                catch (HttpRequestException)
+                {
+                    return AiConnectionTestResult.Failure("AI_UNAVAILABLE");
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            _httpClient.Dispose();
+        }
+    }
+
     public sealed class AiMappingClientResult
     {
         public AiMappingClientResult()
@@ -331,8 +449,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             return JsonConvert.SerializeObject(envelope, Formatting.None);
         }
 
-        private static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
+        internal static async Task<string> ReadBoundedAsync(HttpContent content, CancellationToken cancellationToken)
         {
+            if (content == null)
+                throw new AiMappingClientException("AI 响应内容为空。");
             long? contentLength = content.Headers.ContentLength;
             if (contentLength.HasValue && contentLength.Value > MaximumResponseBytes)
                 throw new AiMappingClientException("AI 响应超过大小上限。");

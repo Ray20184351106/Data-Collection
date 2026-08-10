@@ -84,5 +84,48 @@ namespace MachineDataAcquisitionSystem.Tests
                 if (File.Exists(settingsPath)) File.Delete(settingsPath);
             }
         }
+
+        [Fact]
+        public void SaveAiMappingConfiguration_updates_only_ai_settings_and_preserves_persisted_databases()
+        {
+            string settingsPath = Path.Combine(Path.GetTempPath(), "settings-ai-" + Guid.NewGuid().ToString("N") + ".json");
+            FieldInfo pathField = typeof(SettingsHelper).GetField("SettingsPath", BindingFlags.Static | BindingFlags.NonPublic);
+            FieldInfo cacheField = typeof(SettingsHelper).GetField("_settings", BindingFlags.Static | BindingFlags.NonPublic);
+            object originalPath = pathField.GetValue(null);
+            object originalSettings = cacheField.GetValue(null);
+            try
+            {
+                pathField.SetValue(null, settingsPath);
+                cacheField.SetValue(null, null);
+                SettingsHelper.SaveSettingsOrThrow(new AppSettings
+                {
+                    Databases = new List<DatabaseConfig>
+                    {
+                        new DatabaseConfig { Name = "已保存数据库", DbType = "SQLite", Server = "persisted.db" }
+                    }
+                });
+                SettingsHelper.LoadSettings().Databases[0].Name = "界面未保存修改";
+
+                SettingsHelper.SaveAiMappingConfiguration(new AiMappingConfig
+                {
+                    Enabled = true,
+                    Endpoint = "https://ai.example.test/v1/chat/completions",
+                    Model = "mapping-model",
+                    ApiKey = "api-secret",
+                    TimeoutSeconds = 45
+                });
+
+                JObject json = JObject.Parse(File.ReadAllText(settingsPath));
+                Assert.Equal("已保存数据库", json["Databases"][0]["Name"].Value<string>());
+                Assert.Equal("mapping-model", json["AiMapping"]["Model"].Value<string>());
+                Assert.StartsWith("dpapi:", json["AiMapping"]["ApiKey"].Value<string>(), StringComparison.Ordinal);
+            }
+            finally
+            {
+                pathField.SetValue(null, originalPath);
+                cacheField.SetValue(null, originalSettings);
+                if (File.Exists(settingsPath)) File.Delete(settingsPath);
+            }
+        }
     }
 }

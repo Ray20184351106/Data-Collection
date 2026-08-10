@@ -104,6 +104,34 @@ namespace MachineDataAcquisitionSystem.Helpers
             SaveSettingsOrThrow(settings);
         }
 
+        /// <summary>
+        /// 只保存 AI 映射配置，避免把配置窗口中其他尚未提交的编辑一并写入磁盘。
+        /// </summary>
+        public static void SaveAiMappingConfiguration(AiMappingConfig config)
+        {
+            if (config == null) throw new ArgumentNullException(nameof(config));
+
+            JObject document;
+            if (File.Exists(SettingsPath))
+            {
+                document = JObject.Parse(File.ReadAllText(SettingsPath));
+            }
+            else
+            {
+                document = JObject.FromObject(new AppSettings());
+            }
+
+            JObject aiMapping = CreateAiMappingJson(config);
+            string apiKey = aiMapping.Value<string>("ApiKey");
+            if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("dpapi:", StringComparison.Ordinal))
+                aiMapping["ApiKey"] = "dpapi:" + Protect(apiKey);
+            document["AiMapping"] = aiMapping;
+            File.WriteAllText(SettingsPath, document.ToString(Formatting.Indented));
+
+            if (_settings != null && !ReferenceEquals(_settings.AiMapping, config))
+                CopyAiMapping(config, _settings.AiMapping ?? (_settings.AiMapping = new AiMappingConfig()));
+        }
+
         public static void SaveSettingsOrThrow(AppSettings settings)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
@@ -169,6 +197,16 @@ namespace MachineDataAcquisitionSystem.Helpers
                 ["TimeoutSeconds"] = config.TimeoutSeconds,
                 ["AllowPrivateNetworkHttp"] = config.AllowPrivateNetworkHttp
             };
+        }
+
+        private static void CopyAiMapping(AiMappingConfig source, AiMappingConfig target)
+        {
+            target.Enabled = source.Enabled;
+            target.Endpoint = source.Endpoint;
+            target.Model = source.Model;
+            target.ApiKey = source.ApiKey;
+            target.TimeoutSeconds = source.TimeoutSeconds;
+            target.AllowPrivateNetworkHttp = source.AllowPrivateNetworkHttp;
         }
 
         private static string Protect(string value)
