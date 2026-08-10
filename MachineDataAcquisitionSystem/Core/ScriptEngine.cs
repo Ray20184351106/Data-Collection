@@ -115,6 +115,7 @@ namespace MachineDataAcquisitionSystem.Core
 
             // 读取 GeneratedModels 文件夹中的所有 .cs 文件
             string generatedModelsCode = generatedModelCodeSnapshot ?? GetGeneratedModelsCode(modelId);
+            generatedModelsCode = ApplyConfiguredTableMapping(modelId, generatedModelsCode);
 
             // 构建完整类代码
             string fullCode = $@"
@@ -151,6 +152,7 @@ namespace MachineDataAcquisitionSystem.Core
             compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(HSSFWorkbook)).Location);
             compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(Newtonsoft.Json.JsonConvert)).Location);
             compilerParams.ReferencedAssemblies.Add(Assembly.GetExecutingAssembly().Location);
+            compilerParams.ReferencedAssemblies.Add(Assembly.GetAssembly(typeof(SugarTable)).Location);
 
             // 添加 Yitter.IdGenerator 程序集引用
             try
@@ -348,6 +350,33 @@ namespace MachineDataAcquisitionSystem.Core
             {
                 System.Diagnostics.Debug.WriteLine($"获取Model代码失败: {ex.Message}");
                 return "";
+            }
+        }
+
+        private static string ApplyConfiguredTableMapping(int modelId, string modelSource)
+        {
+            try
+            {
+                using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+                {
+                    conn.Open();
+                    string sql = "SELECT TableName FROM DataModels WHERE Id = @Id";
+                    using (var cmd = new SQLiteCommand(sql, conn))
+                    {
+                        cmd.Parameters.AddWithValue("@Id", modelId);
+                        object value = cmd.ExecuteScalar();
+                        if (value == null || value == DBNull.Value || string.IsNullOrWhiteSpace(value.ToString()))
+                            throw new InvalidOperationException("The configured database table name is missing.");
+                        return ModelTableMapping.ApplySqlSugarTableAttribute(modelSource, value.ToString());
+                    }
+                }
+            }
+            catch (SQLiteException ex)
+            {
+                // Published snapshots remain executable during configuration-database outages.
+                // When the configuration database is available, a missing TableName still fails fast above.
+                System.Diagnostics.Debug.WriteLine($"读取模型表映射失败，保留已发布快照: {ex.Message}");
+                return modelSource;
             }
         }
 

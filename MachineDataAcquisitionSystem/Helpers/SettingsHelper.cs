@@ -14,6 +14,7 @@ namespace MachineDataAcquisitionSystem.Helpers
     {
         private static string SettingsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
         private static AppSettings _settings;
+        public static string LastLoadError { get; private set; }
 
         /// <summary>
         /// 加载默认配置
@@ -22,6 +23,8 @@ namespace MachineDataAcquisitionSystem.Helpers
         {
             if (_settings != null)
                 return _settings;
+
+            LastLoadError = null;
 
             if (!File.Exists(SettingsPath))
             {
@@ -33,10 +36,11 @@ namespace MachineDataAcquisitionSystem.Helpers
             try
             {
                 string json = File.ReadAllText(SettingsPath);
-                _settings = JsonConvert.DeserializeObject<AppSettings>(json) ?? new AppSettings();
+                JObject document = JObject.Parse(json);
+                bool needsMigration = NormalizeAiMapping(document);
+                _settings = document.ToObject<AppSettings>() ?? new AppSettings();
                 if (_settings.AiMapping == null)
                     _settings.AiMapping = new AiMappingConfig();
-                bool needsMigration = false;
                 if (_settings.Databases != null)
                 {
                     foreach (var database in _settings.Databases)
@@ -67,8 +71,9 @@ namespace MachineDataAcquisitionSystem.Helpers
                 if (needsMigration) SaveSettings(_settings);
                 return _settings;
             }
-            catch
+            catch (Exception ex)
             {
+                LastLoadError = "无法读取配置文件，原文件未被修改：" + ex.Message;
                 _settings = new AppSettings();
                 return _settings;
             }
@@ -81,32 +86,89 @@ namespace MachineDataAcquisitionSystem.Helpers
         {
             try
             {
-                JObject document = JObject.FromObject(settings);
-                var databases = document["Databases"] as JArray;
-                if (databases != null)
-                {
-                    foreach (var item in databases.OfType<JObject>())
-                    {
-                        string password = item.Value<string>("Password");
-                        if (!string.IsNullOrEmpty(password) && !password.StartsWith("dpapi:", StringComparison.Ordinal))
-                            item["Password"] = "dpapi:" + Protect(password);
-                        string connectionString = item.Value<string>("ConnectionString");
-                        if (!string.IsNullOrEmpty(connectionString) && !connectionString.StartsWith("dpapi:", StringComparison.Ordinal))
-                            item["ConnectionString"] = "dpapi:" + Protect(connectionString);
-                    }
-                }
-                var aiMapping = document["AiMapping"] as JObject;
-                if (aiMapping != null)
-                {
-                    string apiKey = aiMapping.Value<string>("ApiKey");
-                    if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("dpapi:", StringComparison.Ordinal))
-                        aiMapping["ApiKey"] = "dpapi:" + Protect(apiKey);
-                }
-                string json = document.ToString(Formatting.Indented);
-                File.WriteAllText(SettingsPath, json);
-                _settings = settings;
+                SaveSettingsOrThrow(settings);
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Persists changes made by the database editor immediately. Unlike the
+        /// general startup save path, errors are returned to the caller so the UI
+        /// never reports a successful save when appsettings.json was not written.
+        /// </summary>
+        public static void SaveDatabaseConfigurations(System.Collections.Generic.IEnumerable<DatabaseConfig> databases)
+        {
+            if (databases == null) throw new ArgumentNullException(nameof(databases));
+            AppSettings settings = LoadSettings();
+            settings.Databases = databases.ToList();
+            SaveSettingsOrThrow(settings);
+        }
+
+        public static void SaveSettingsOrThrow(AppSettings settings)
+        {
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+
+            JObject document = JObject.FromObject(settings);
+            document["AiMapping"] = CreateAiMappingJson(settings.AiMapping);
+            var databases = document["Databases"] as JArray;
+            if (databases != null)
+            {
+                foreach (var item in databases.OfType<JObject>())
+                {
+                    string password = item.Value<string>("Password");
+                    if (!string.IsNullOrEmpty(password) && !password.StartsWith("dpapi:", StringComparison.Ordinal))
+                        item["Password"] = "dpapi:" + Protect(password);
+                    string connectionString = item.Value<string>("ConnectionString");
+                    if (!string.IsNullOrEmpty(connectionString) && !connectionString.StartsWith("dpapi:", StringComparison.Ordinal))
+                        item["ConnectionString"] = "dpapi:" + Protect(connectionString);
+                }
+            }
+            var aiMapping = document["AiMapping"] as JObject;
+            if (aiMapping != null)
+            {
+                string apiKey = aiMapping.Value<string>("ApiKey");
+                if (!string.IsNullOrEmpty(apiKey) && !apiKey.StartsWith("dpapi:", StringComparison.Ordinal))
+                    aiMapping["ApiKey"] = "dpapi:" + Protect(apiKey);
+            }
+            string json = document.ToString(Formatting.Indented);
+            File.WriteAllText(SettingsPath, json);
+            _settings = settings;
+        }
+
+        private static bool NormalizeAiMapping(JObject document)
+        {
+            JToken token = document["AiMapping"];
+            if (token == null || token.Type == JTokenType.Null)
+            {
+                document["AiMapping"] = CreateAiMappingJson(new AiMappingConfig());
+                return true;
+            }
+
+            // Previous versions serialized this property through its WinForms type
+            // converter, leaving only a display string such as "未启用". Preserve
+            // the rest of the configuration and migrate this value to defaults.
+            if (token.Type == JTokenType.String)
+            {
+                document["AiMapping"] = CreateAiMappingJson(new AiMappingConfig());
+                return true;
+            }
+            if (token.Type != JTokenType.Object)
+                throw new JsonSerializationException("AiMapping must be a JSON object.");
+            return false;
+        }
+
+        private static JObject CreateAiMappingJson(AiMappingConfig config)
+        {
+            config = config ?? new AiMappingConfig();
+            return new JObject
+            {
+                ["Enabled"] = config.Enabled,
+                ["Endpoint"] = config.Endpoint ?? string.Empty,
+                ["Model"] = config.Model ?? string.Empty,
+                ["ApiKey"] = config.ApiKey ?? string.Empty,
+                ["TimeoutSeconds"] = config.TimeoutSeconds,
+                ["AllowPrivateNetworkHttp"] = config.AllowPrivateNetworkHttp
+            };
         }
 
         private static string Protect(string value)

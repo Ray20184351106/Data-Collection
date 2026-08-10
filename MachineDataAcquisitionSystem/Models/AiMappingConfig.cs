@@ -1,10 +1,12 @@
 using System;
 using System.ComponentModel;
 using MachineDataAcquisitionSystem.Core.Mapping;
+using Newtonsoft.Json;
 
 namespace MachineDataAcquisitionSystem.Models
 {
     [TypeConverter(typeof(ExpandableObjectConverter))]
+    [JsonObject(MemberSerialization.OptOut)]
     public sealed class AiMappingConfig
     {
         [Category("AI 自动映射")]

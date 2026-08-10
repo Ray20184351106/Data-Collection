@@ -355,7 +355,6 @@
             this.btnSaveDb.TabIndex = 3;
             this.btnSaveDb.Text = "确定";
             this.btnSaveDb.UseVisualStyleBackColor = true;
-            this.btnSaveDb.Click += new System.EventHandler(this.BtnSave_Click);
             // 
             // lblDbStatus
             // 
@@ -407,7 +406,7 @@
             // 
             this.menuSetPrimary.Name = "menuSetPrimary";
             this.menuSetPrimary.Size = new System.Drawing.Size(124, 22);
-            this.menuSetPrimary.Text = "设为默认";
+            this.menuSetPrimary.Text = "设为主数据库";
             // 
             // menuTestConn
             // 

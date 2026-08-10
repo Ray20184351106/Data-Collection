@@ -91,14 +91,13 @@ namespace MachineDataAcquisitionSystem.Models
             string dbTypeLower = DbType.ToLower().Trim();
             if (dbTypeLower == "sqlserver" || dbTypeLower == "sql server" || dbTypeLower == "sqlserver")
             {
-                if (Port > 0 && Port != 1433)
+                string server = Port > 0 && Port != 1433 ? $"{Server},{Port}" : Server;
+                if (string.IsNullOrWhiteSpace(UserId) && string.IsNullOrWhiteSpace(Password))
                 {
-                    return $"Server={Server},{Port};Database={DatabaseName};User Id={UserId};Password={Password};";
+                    return $"Server={server};Database={DatabaseName};Integrated Security=True;";
                 }
-                else
-                {
-                    return $"Server={Server};Database={DatabaseName};User Id={UserId};Password={Password};";
-                }
+
+                return $"Server={server};Database={DatabaseName};User Id={UserId};Password={Password};";
             }
             else if (dbTypeLower == "mysql")
             {

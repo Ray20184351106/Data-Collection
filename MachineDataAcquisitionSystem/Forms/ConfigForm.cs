@@ -1,5 +1,6 @@
 ﻿using MachineDataAcquisitionSystem.Helpers;
 using MachineDataAcquisitionSystem.Models;
+using MachineDataAcquisitionSystem.Core;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -23,12 +24,16 @@ namespace MachineDataAcquisitionSystem.Forms
         private List<DatabaseConfig> _databases;
         private DatabaseConfig _currentDatabase;
         private PropertyGrid _aiMappingPropertyGrid;
+        private bool _configurationLoaded;
+        private bool _configurationHasUnsavedEdits;
+        private bool _reloadingConfiguration;
 
         public ConfigForm()
         {
             InitializeComponent();
 
             this.Load += ConfigForm_Load;
+            this.Activated += ConfigForm_Activated;
             btnCancel.Click += (s, e) => this.Close();
             btnSave.Click += BtnSave_Click;
 
@@ -41,10 +46,6 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 btnAddDb.Click += BtnAddDb_Click;
             }
-            if (btnTestConn != null)
-            {
-                btnTestConn.Click += btnTestConn_Click;
-            }
             if (btnSaveDb != null)
             {
                 btnSaveDb.Click += BtnSaveDb_Click;
@@ -56,6 +57,8 @@ namespace MachineDataAcquisitionSystem.Forms
 
             // 绑定右键菜单事件
             menuDelete.Click += menuDelete_Click;
+            menuSetPrimary.Click += MenuSetPrimary_Click;
+            menuTestConn.Click += btnTestConn_Click;
         }
 
         // ========== 路径配置方法 ==========
@@ -81,21 +84,61 @@ namespace MachineDataAcquisitionSystem.Forms
                 _dgvPath.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
             }
 
-            // 加载配置
-            _machineConfigs = MachineConfig.Load();
-            if (_machineConfigs == null || _machineConfigs.Count == 0)
+            ReloadConfigurationFromStorage();
+            if (!string.IsNullOrWhiteSpace(SettingsHelper.LastLoadError))
             {
-                _machineConfigs = SettingsHelper.GenerateDefaultMachineConfigs();
+                MessageBox.Show(
+                    SettingsHelper.LastLoadError,
+                    "配置文件读取失败",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
 
-            _appSettings = SettingsHelper.LoadSettings();
+            _configurationLoaded = true;
+            _configurationHasUnsavedEdits = false;
+            if (_dgvPath != null)
+                _dgvPath.CellValueChanged += PathGrid_CellValueChanged;
+        }
 
-            // 绑定数据
-            LoadDataToGrid();
+        private void ConfigForm_Activated(object sender, EventArgs e)
+        {
+            if (!_configurationLoaded || _configurationHasUnsavedEdits) return;
 
-            // ========== 加载数据库配置 ==========
-            LoadDatabases();
-            LoadAiMappingSettings();
+            ReloadConfigurationFromStorage();
+        }
+
+        private void ReloadConfigurationFromStorage()
+        {
+            string selectedDatabaseName = _currentDatabase == null ? null : _currentDatabase.Name;
+            _reloadingConfiguration = true;
+            try
+            {
+                _machineConfigs = MachineConfig.Load();
+                if (_machineConfigs == null || _machineConfigs.Count == 0)
+                    _machineConfigs = SettingsHelper.GenerateDefaultMachineConfigs();
+
+                _appSettings = SettingsHelper.LoadSettings();
+                LoadDataToGrid();
+                LoadDatabases();
+                if (!string.IsNullOrWhiteSpace(selectedDatabaseName))
+                {
+                    DatabaseConfig selectedDatabase = _databases.FirstOrDefault(
+                        database => string.Equals(database.Name, selectedDatabaseName, StringComparison.Ordinal));
+                    if (selectedDatabase != null)
+                        SelectDatabase(selectedDatabase);
+                }
+                LoadAiMappingSettings();
+            }
+            finally
+            {
+                _reloadingConfiguration = false;
+            }
+        }
+
+        private void PathGrid_CellValueChanged(object sender, DataGridViewCellEventArgs e)
+        {
+            if (!_reloadingConfiguration && e.RowIndex >= 0)
+                _configurationHasUnsavedEdits = true;
         }
 
         private void LoadAiMappingSettings()
@@ -137,6 +180,7 @@ namespace MachineDataAcquisitionSystem.Forms
             if (result == DialogResult.Yes)
             {
                 _databases.Remove(db);
+                _configurationHasUnsavedEdits = true;
                 RefreshDatabaseList();
 
                 if (_databases.Count > 0)
@@ -149,6 +193,40 @@ namespace MachineDataAcquisitionSystem.Forms
                 }
 
                 UpdateDbStatus($"已删除数据库 \"{db.Name}\"", Color.Blue);
+            }
+        }
+
+        private void MenuSetPrimary_Click(object sender, EventArgs e)
+        {
+            if (listViewDb.SelectedItems.Count == 0)
+            {
+                UpdateDbStatus("请先选择数据库", Color.Firebrick);
+                return;
+            }
+
+            DatabaseConfig selectedDatabase = listViewDb.SelectedItems[0].Tag as DatabaseConfig;
+            if (selectedDatabase == null) return;
+
+            var previousValues = _databases.ToDictionary(database => database, database => database.IsPrimary);
+            try
+            {
+                DatabasePrimarySelectionService.SetPrimary(_databases, selectedDatabase);
+                SettingsHelper.SaveDatabaseConfigurations(_databases);
+                _appSettings.Databases = _databases;
+                _currentDatabase = selectedDatabase;
+                _configurationHasUnsavedEdits = false;
+                RefreshDatabaseList();
+                SelectDatabase(selectedDatabase);
+                propertyGridDb.Refresh();
+                UpdateDbStatus($"已将 {selectedDatabase.Name} 设为主数据库", Color.Green);
+            }
+            catch (Exception ex)
+            {
+                foreach (KeyValuePair<DatabaseConfig, bool> previousValue in previousValues)
+                    previousValue.Key.IsPrimary = previousValue.Value;
+                RefreshDatabaseList();
+                UpdateDbStatus("设置主数据库失败", Color.Firebrick);
+                MessageBox.Show("设置主数据库失败：" + ex.Message, "数据库配置", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -171,6 +249,12 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void BtnSave_Click(object sender, EventArgs e)
         {
+            if (_dgvPath != null && !_dgvPath.EndEdit())
+            {
+                MessageBox.Show("请先完成当前路径单元格的编辑。", "路径配置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             // 保存路径配置
             if (_dgvPath != null)
             {
@@ -183,11 +267,18 @@ namespace MachineDataAcquisitionSystem.Forms
             }
 
             // 保存数据库配置到 _appSettings
-            _appSettings.Databases = _databases;
-
-            // 保存到文件
-            MachineConfig.Save(_machineConfigs);
-            SettingsHelper.SaveSettings(_appSettings);
+            try
+            {
+                _appSettings.Databases = _databases;
+                MachineConfig.Save(_machineConfigs);
+                SettingsHelper.SaveSettingsOrThrow(_appSettings);
+                _configurationHasUnsavedEdits = false;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("配置保存失败：" + ex.Message, "配置保存", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
 
             // 询问是否重启
@@ -235,12 +326,12 @@ namespace MachineDataAcquisitionSystem.Forms
 
             foreach (var db in _databases)
             {
-                string statusIcon = db.IsPrimary ? "●" : "○";
                 string connIcon = db.LastTestResult ? "🟢" : "⚪";
+                string status = db.IsPrimary ? "主库 " + connIcon : connIcon;
                 string info = $"{db.DbType} | {db.Server}";
 
                 ListViewItem item = new ListViewItem(db.Name);
-                item.SubItems.Add(connIcon);
+                item.SubItems.Add(status);
                 item.SubItems.Add(info);
                 item.Tag = db;
 
@@ -287,6 +378,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 Name = $"数据库{_databases.Count + 1}"
             };
             _databases.Add(newDb);
+            _configurationHasUnsavedEdits = true;
             RefreshDatabaseList();
             SelectDatabase(newDb);
         }
@@ -295,17 +387,41 @@ namespace MachineDataAcquisitionSystem.Forms
         {
             if (_currentDatabase != null)
             {
-                // 自动生成连接字符串
-                if (string.IsNullOrEmpty(_currentDatabase.ConnectionString))
+                try
                 {
-                    _currentDatabase.ConnectionString = GenerateConnectionString(_currentDatabase);
+                    // 自动生成连接字符串
+                    if (string.IsNullOrEmpty(_currentDatabase.ConnectionString))
+                    {
+                        _currentDatabase.ConnectionString = GenerateConnectionString(_currentDatabase);
+                    }
+
+                    if (!DatabaseConnectionTester.TryValidateConnectionString(
+                        _currentDatabase.DbType,
+                        _currentDatabase.ConnectionString,
+                        out string validationError))
+                    {
+                        UpdateDbStatus("配置不完整", Color.Firebrick);
+                        MessageBox.Show(validationError, "数据库配置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    SettingsHelper.SaveDatabaseConfigurations(_databases);
+                    _appSettings.Databases = _databases;
+                    _configurationHasUnsavedEdits = false;
+
+                    // 刷新左边列表
+                    RefreshDatabaseList();
+                    UpdateDbStatus("保存成功！", Color.Green);
                 }
-
-                // 刷新左边列表
-                RefreshDatabaseList();
-
-                // 更新状态
-                UpdateDbStatus("保存成功！", Color.Green);
+                catch (Exception ex)
+                {
+                    UpdateDbStatus("保存失败", Color.Firebrick);
+                    MessageBox.Show("数据库配置保存失败：" + ex.Message, "数据库配置", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            else
+            {
+                UpdateDbStatus("请先选择数据库", Color.Firebrick);
             }
         }
 
@@ -321,105 +437,59 @@ namespace MachineDataAcquisitionSystem.Forms
 
             UpdateDbStatus("正在测试连接...", Color.Blue);
 
-            string connStr = string.IsNullOrEmpty(_currentDatabase.ConnectionString)
-                ? GenerateConnectionString(_currentDatabase)
-                : _currentDatabase.ConnectionString;
-
-            bool success = TestConnection(_currentDatabase.DbType, connStr);
+            string connStr = _currentDatabase.GetConnectionString();
+            bool success = DatabaseConnectionTester.TryOpen(
+                _currentDatabase.DbType,
+                connStr,
+                out string error);
 
             _currentDatabase.LastTestTime = DateTime.Now;
             _currentDatabase.LastTestResult = success;
+            RefreshDatabaseList();
 
             if (success)
             {
                 UpdateDbStatus("连接成功！", Color.Green);
-                RefreshDatabaseList();
             }
             else
             {
-                UpdateDbStatus("连接失败，请检查配置", Color.Red);
+                UpdateDbStatus("连接失败", Color.Red);
+                MessageBox.Show(error ?? "连接失败，请检查配置。", "数据库连接测试", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private string GenerateConnectionString(DatabaseConfig db)
         {
-            switch (db.DbType)
-            {
-                case "SQLite":
-                    return $"Data Source={db.Server};Version=3;";
-                case "SQL Server":
-                    int port = db.Port > 0 ? db.Port : 1433;
-                    return $"Server={db.Server},{port};Database={db.DatabaseName};User Id={db.UserId};Password={db.Password};";
-                case "MySQL":
-                    int myport = db.Port > 0 ? db.Port : 3306;
-                    return $"Server={db.Server};Port={myport};Database={db.DatabaseName};Uid={db.UserId};Pwd={db.Password};";
-                case "PostgreSQL":
-                    int pgport = db.Port > 0 ? db.Port : 5432;
-                    return $"Host={db.Server};Port={pgport};Database={db.DatabaseName};Username={db.UserId};Password={db.Password};";
-                default:
-                    return "";
-            }
-        }
-
-        private bool TestConnection(string dbType, string connStr)
-        {
-            try
-            {
-                switch (dbType)
-                {
-                    case "SQLite":
-                        using (var conn = new System.Data.SQLite.SQLiteConnection(connStr))
-                        {
-                            conn.Open();
-                            conn.Close();
-                        }
-                        break;
-                    case "SQL Server":
-                        using (var conn = new System.Data.SqlClient.SqlConnection(connStr))
-                        {
-                            conn.Open();
-                            conn.Close();
-                        }
-                        break;
-                    case "MySQL":
-                        using (var conn = new MySql.Data.MySqlClient.MySqlConnection(connStr))
-                        {
-                            conn.Open();
-                            conn.Close();
-                        }
-                        break;
-                    //case "PostgreSQL":
-                    //    using (var conn = new Npgsql.NpgsqlConnection(connStr))
-                    //    {
-                    //        conn.Open();
-                    //        conn.Close();
-                    //    }
-                    //    break;
-                }
-                return true;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"连接失败: {ex.Message}");
-                return false;
-            }
+            return db == null ? "" : db.GetConnectionString();
         }
 
         private void PropertyGridDb_PropertyValueChanged(object sender, PropertyValueChangedEventArgs e)
         {
-            // 当属性改变时，清空自动生成的连接字符串
-            if (_currentDatabase != null && e.ChangedItem.PropertyDescriptor.Name != "ConnectionString")
+            string propertyName = e.ChangedItem.PropertyDescriptor.Name;
+            // 只有真实连接参数发生变化时，才丢弃旧的自动/自定义连接字符串。
+            if (_currentDatabase != null &&
+                DatabaseConfigurationRules.ConnectionStringShouldBeRegenerated(propertyName))
             {
                 _currentDatabase.ConnectionString = "";
             }
+            if (_currentDatabase != null &&
+                propertyName == "IsPrimary" &&
+                _currentDatabase.IsPrimary)
+            {
+                DatabasePrimarySelectionService.SetPrimary(_databases, _currentDatabase);
+                RefreshDatabaseList();
+                propertyGridDb.Refresh();
+            }
+            if (!_reloadingConfiguration)
+                _configurationHasUnsavedEdits = true;
         }
 
         private void UpdateDbStatus(string message, Color color)
         {
-            if (btnSaveDb != null)
+            if (lblDbStatus != null)
             {
-                btnSaveDb.Text = message;
-                btnSaveDb.ForeColor = color;
+                lblDbStatus.Text = message;
+                lblDbStatus.ForeColor = color;
             }
         }
     }
