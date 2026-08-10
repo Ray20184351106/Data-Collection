@@ -1207,11 +1207,9 @@ namespace MachineDataAcquisitionSystem.Forms
             sb.AppendLine($"    public class {model.ModelName}");
             sb.AppendLine("    {");
 
-            // 添加基类字段（不生成默认值）
+            // 添加基类字段（默认值由采集时统一补全）
             foreach (var field in baseFields)
             {
-                if (field.FieldName == "CID") continue;  // 跳过 CID
-
                 string propertyType = GetCSharpType(field.FieldType);
                 sb.AppendLine();
                 sb.AppendLine("        /// <summary>");

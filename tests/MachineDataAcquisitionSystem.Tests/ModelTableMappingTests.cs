@@ -23,7 +23,31 @@ namespace MachineDataAcquisitionSystem.Tests
 
             string mappedSource = ModelTableMapping.ApplySqlSugarTableAttribute(source, "NewTable");
 
-            Assert.Equal(source, mappedSource);
+            Assert.Equal(1, CountOccurrences(mappedSource, "[SqlSugar.SugarTable(\"NewTable\")]") );
+            Assert.Contains("public long CID { get; set; }", mappedSource);
+        }
+
+        [Fact]
+        public void ApplySqlSugarTableAttribute_adds_a_CID_property_for_legacy_model_snapshots()
+        {
+            string source = "public class LegacyModel { public string CR { get; set; } }";
+
+            string mappedSource = ModelTableMapping.ApplySqlSugarTableAttribute(source, "NewTable");
+
+            Assert.Contains("public long CID { get; set; }", mappedSource);
+        }
+
+        private static int CountOccurrences(string text, string value)
+        {
+            int count = 0;
+            int startIndex = 0;
+            while ((startIndex = text.IndexOf(value, startIndex, System.StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                startIndex += value.Length;
+            }
+
+            return count;
         }
     }
 }

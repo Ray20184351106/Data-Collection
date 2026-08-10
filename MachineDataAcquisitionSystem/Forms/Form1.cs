@@ -1043,8 +1043,6 @@ namespace MachineDataAcquisitionSystem
 
                 foreach (var fieldConfig in defaultValues)
                 {
-                    // ========== 跳过 CID，让数据库自动生成 ==========
-                    if (fieldConfig.FieldName == "CID") continue;
                     var prop = type.GetProperty(fieldConfig.FieldName);
                     if (prop == null) continue;
 
@@ -1081,6 +1079,9 @@ namespace MachineDataAcquisitionSystem
                         }
                     }
                 }
+
+                if (ModelIdentityInitializer.EnsureCid(model, () => YitIdHelper.NextId()))
+                    AddLog("已自动生成 CID", LogLevel.Info);
             }
             catch (Exception ex)
             {
@@ -1143,6 +1144,8 @@ namespace MachineDataAcquisitionSystem
                     }
                 }
                 // ===============================================
+
+                ModelIdentityInitializer.EnsureCid(model, () => YitIdHelper.NextId());
 
                 var settings = SettingsHelper.LoadSettings();
                 var primaryDb = settings.Databases?.FirstOrDefault(d => d.IsPrimary);
@@ -1215,7 +1218,7 @@ namespace MachineDataAcquisitionSystem
                     using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
                     {
                         conn.Open();
-                        string sql = "SELECT FieldName, FieldType, DefaultValue FROM BaseFields WHERE DefaultValue IS NOT NULL AND DefaultValue != '' AND FieldName != 'CID'";
+                        string sql = "SELECT FieldName, FieldType, DefaultValue FROM BaseFields WHERE DefaultValue IS NOT NULL AND DefaultValue != ''";
 
                         using (var cmd = new SQLiteCommand(sql, conn))
                         using (var reader = cmd.ExecuteReader())
@@ -2026,11 +2029,12 @@ VALUES
                         foreach (var group in groups)
                         {
                             var list = group.Select(x => x.Model).ToList();
+                            foreach (object model in list)
+                                ModelIdentityInitializer.EnsureCid(model, () => YitIdHelper.NextId());
                             AddLog($"插入类型 {group.Key.Name}，共 {list.Count} 条", LogLevel.Info);
 
                             int result = await db
                                 .InsertableByObject(list)
-                                .IgnoreColumns("CID")
                                 .ExecuteCommandAsync();
                             insertedRows += result;
                         }

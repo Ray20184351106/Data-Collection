@@ -180,6 +180,7 @@
     <Compile Include="Core\Machine.cs" />
     <Compile Include="Core\MachineManager.cs" />
     <Compile Include="Core\ModelCatalogService.cs" />
+    <Compile Include="Core\ModelIdentityInitializer.cs" />
     <Compile Include="Core\ModelTableMapping.cs" />
     <Compile Include="Core\Mapping\AiMappingResponseValidator.cs" />
     <Compile Include="Core\Mapping\AiMappingClient.cs" />

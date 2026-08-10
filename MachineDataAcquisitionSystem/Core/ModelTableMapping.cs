@@ -1,4 +1,5 @@
 using System;
+using System.Text.RegularExpressions;
 
 namespace MachineDataAcquisitionSystem.Core
 {
@@ -26,17 +27,50 @@ namespace MachineDataAcquisitionSystem.Core
             int attributeStart = beforeClass.LastIndexOf("[SqlSugar.SugarTable(", StringComparison.Ordinal);
             if (attributeStart < 0)
                 attributeStart = beforeClass.LastIndexOf("[SugarTable(", StringComparison.Ordinal);
+            string mappedSource;
             if (attributeStart >= 0)
             {
                 int attributeEnd = modelSource.IndexOf(']', attributeStart);
                 if (attributeEnd < 0 || attributeEnd > classIndex)
                     throw new InvalidOperationException("The generated model source contains an incomplete SugarTable attribute.");
-                return modelSource.Substring(0, attributeStart) +
+                mappedSource = modelSource.Substring(0, attributeStart) +
                     attribute +
                     modelSource.Substring(attributeEnd + 1);
             }
+            else
+            {
+                mappedSource = modelSource.Insert(classIndex, attribute + Environment.NewLine);
+            }
 
-            return modelSource.Insert(classIndex, attribute + Environment.NewLine);
+            return EnsureCidProperty(mappedSource);
+        }
+
+        /// <summary>
+        /// Legacy model snapshots may predate the mandatory snowflake-key field.
+        /// Add it before compiling so the batch writer can provide CID explicitly.
+        /// </summary>
+        private static string EnsureCidProperty(string modelSource)
+        {
+            if (Regex.IsMatch(modelSource, @"\bCID\s*\{", RegexOptions.CultureInvariant))
+                return modelSource;
+
+            int classIndex = modelSource.IndexOf("public class", StringComparison.Ordinal);
+            int openBraceIndex = modelSource.IndexOf('{', classIndex);
+            if (openBraceIndex < 0)
+                throw new InvalidOperationException("The generated model source does not contain a class body.");
+
+            int depth = 0;
+            for (int index = openBraceIndex; index < modelSource.Length; index++)
+            {
+                if (modelSource[index] == '{') depth++;
+                if (modelSource[index] == '}' && --depth == 0)
+                {
+                    const string cidProperty = "\r\n        public long CID { get; set; }\r\n";
+                    return modelSource.Insert(index, cidProperty);
+                }
+            }
+
+            throw new InvalidOperationException("The generated model source contains an incomplete class body.");
         }
 
         private static string EscapeCSharpString(string value)
