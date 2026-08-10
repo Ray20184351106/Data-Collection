@@ -2,7 +2,9 @@ using System;
 using System.IO;
 using MachineDataAcquisitionSystem.Core;
 using MachineDataAcquisitionSystem.Core.Mapping;
+using MachineDataAcquisitionSystem.Helpers;
 using MachineDataAcquisitionSystem.Models;
+using System.Data.SQLite;
 using Xunit;
 
 namespace MachineDataAcquisitionSystem.Tests
@@ -20,11 +22,12 @@ namespace MachineDataAcquisitionSystem.Tests
 
             try
             {
+                int configuredModelId = GetConfiguredModelId();
                 var script = new ParseScript
                 {
                     ParserVersionId = 1,
                     IsEnabled = true,
-                    ModelId = 1,
+                    ModelId = configuredModelId,
                     TargetModelType = modelName,
                     ScriptCode = "return new " + modelName + "();",
                     RuleType = ParseRuleType.LegacyCode,
@@ -45,6 +48,25 @@ namespace MachineDataAcquisitionSystem.Tests
                 {
                     File.Delete(path);
                 }
+            }
+        }
+
+        private static int GetConfiguredModelId()
+        {
+            using (var connection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = @"
+SELECT Id
+FROM DataModels
+WHERE TableName IS NOT NULL AND TRIM(TableName) <> ''
+ORDER BY Id
+LIMIT 1;";
+                object value = command.ExecuteScalar();
+                if (value == null || value == DBNull.Value)
+                    throw new InvalidOperationException("测试数据库缺少已配置目标表的数据模型。");
+                return Convert.ToInt32(value);
             }
         }
     }
