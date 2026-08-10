@@ -25,7 +25,7 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
         }
 
         [Fact]
-        public void DeleteMappingDefinition_rejects_a_published_rule()
+        public void DeleteMappingDefinition_removes_a_published_rule_and_its_machine_bindings()
         {
             using (var fixture = DeletionFixture.Create())
             using (var store = new ParseRuleStore(fixture.DatabasePath))
@@ -35,8 +35,11 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
                 ParseRuleVersion validated = store.Validate(draft.Id, draft.Revision, "passed");
                 ParseRuleVersion published = store.Publish(validated.Id, "1", validated.Revision);
 
-                Assert.Throws<ConfigurationDeletionBlockedException>(() =>
-                    new ConfigurationDeletionService(fixture.DatabasePath).DeleteMappingDefinition(published.DefinitionId));
+                new ConfigurationDeletionService(fixture.DatabasePath).DeleteMappingDefinition(published.DefinitionId);
+
+                Assert.Equal(0L, fixture.ScalarLong("SELECT COUNT(*) FROM PublishedParseRuleBindings;"));
+                Assert.Equal(0L, fixture.ScalarLong("SELECT COUNT(*) FROM ParseRuleVersions;"));
+                Assert.Equal(0L, fixture.ScalarLong("SELECT COUNT(*) FROM ParseRuleDefinitions;"));
             }
         }
 

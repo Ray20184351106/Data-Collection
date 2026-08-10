@@ -14,8 +14,8 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
     }
 
     /// <summary>
-    /// Deletes design-time configuration only after confirming it is not in use by
-    /// a published rule or another configuration record.
+    /// Deletes design-time configuration after applying the reference rules for
+    /// each configuration type. Mapping deletion also removes its published bindings.
     /// </summary>
     public sealed class ConfigurationDeletionService
     {
@@ -101,12 +101,16 @@ WHERE v.DefinitionId=@DefinitionId LIMIT 1;", definitionId,
             using (var transaction = connection.BeginTransaction(IsolationLevel.Serializable))
             {
                 RequireExists(connection, transaction,
-                    "SELECT 1 FROM ParseRuleDefinitions WHERE Id=@Id;", definitionId, "字段映射不存在或已删除。");
-                EnsureNoRows(connection, transaction, @"
-SELECT 1 FROM PublishedParseRuleBindings b
-INNER JOIN ParseRuleVersions v ON v.Id=b.ParseRuleVersionId
-WHERE v.DefinitionId=@DefinitionId LIMIT 1;", definitionId,
-                    "该字段映射已经发布到机台，不能直接删除。请先发布替代规则后再删除。");
+                    @"SELECT 1
+FROM ParseRuleDefinitions d
+INNER JOIN ParseRuleVersions v ON v.DefinitionId=d.Id
+WHERE d.Id=@Id AND v.RuleType=0
+LIMIT 1;", definitionId, "字段映射不存在或已删除。");
+                Execute(connection, transaction, @"
+DELETE FROM PublishedParseRuleBindings
+WHERE ParseRuleVersionId IN (
+    SELECT Id FROM ParseRuleVersions WHERE DefinitionId=@Id
+);", definitionId);
                 DeleteDefinitionRows(connection, transaction, definitionId);
                 transaction.Commit();
             }

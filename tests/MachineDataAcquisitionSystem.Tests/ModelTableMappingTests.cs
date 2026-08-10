@@ -37,6 +37,36 @@ namespace MachineDataAcquisitionSystem.Tests
             Assert.Contains("public long CID { get; set; }", mappedSource);
         }
 
+        [Fact]
+        public void Column_attribute_preserves_required_length_primary_key_and_identity_configuration()
+        {
+            string attribute = ModelTableMapping.GetSqlSugarColumnAttribute(
+                fieldLength: 40,
+                isRequired: false,
+                isPrimaryKey: true,
+                isIdentity: true,
+                description: "configured");
+
+            Assert.Contains("IsNullable = false", attribute);
+            Assert.Contains("Length = 40", attribute);
+            Assert.Contains("IsPrimaryKey = true", attribute);
+            Assert.Contains("IsIdentity = true", attribute);
+            Assert.Contains("ColumnDescription = \"configured\"", attribute);
+        }
+
+        [Fact]
+        public void Optional_column_attribute_is_nullable()
+        {
+            string attribute = ModelTableMapping.GetSqlSugarColumnAttribute(
+                fieldLength: 0,
+                isRequired: false,
+                isPrimaryKey: false,
+                isIdentity: false,
+                description: null);
+
+            Assert.Contains("IsNullable = true", attribute);
+        }
+
         private static int CountOccurrences(string text, string value)
         {
             int count = 0;

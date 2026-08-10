@@ -56,11 +56,9 @@ namespace MachineDataAcquisitionSystem.Forms
         private Button _mappingPickLocatorButton;
         private Button _mappingLocalAssistButton;
         private Button _mappingAiAssistButton;
-        private Button _mappingSaveDraftButton;
-        private Button _mappingValidateButton;
-        private Button _mappingPublishButton;
-        private Button _mappingHistoryButton;
+        private Button _mappingSaveButton;
         private Button _mappingDeleteButton;
+        private FlowLayoutPanel _mappingMachinePanel;
         private DataGridView _mappingSampleGrid;
         private SplitContainer _mappingCenterSplit;
         private ToolTip _mappingToolTip;
@@ -89,7 +87,7 @@ namespace MachineDataAcquisitionSystem.Forms
             splitContainer3.Panel2.SuspendLayout();
             try
             {
-                panel2.Height = 112;
+                panel2.Height = 152;
                 panel3.Height = 62;
                 btnNewMappingScript.Text = "+ 新建映射";
 
@@ -124,7 +122,7 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 8,
-                RowCount = 3,
+                RowCount = 4,
                 Padding = new Padding(6, 4, 6, 2)
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -138,6 +136,7 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
 
             _mappingModelCombo = new ComboBox
             {
@@ -232,6 +231,17 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.Controls.Add(assistants, 2, 2);
             layout.SetColumnSpan(assistants, 6);
 
+            _mappingMachinePanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                AutoScroll = true,
+                WrapContents = true,
+                Margin = new Padding(0)
+            };
+            layout.Controls.Add(CreateMappingLabel("适用机台："), 0, 3);
+            layout.Controls.Add(_mappingMachinePanel, 1, 3);
+            layout.SetColumnSpan(_mappingMachinePanel, 7);
+
             panel2.Controls.Add(layout);
         }
 
@@ -308,14 +318,8 @@ namespace MachineDataAcquisitionSystem.Forms
                 WrapContents = false,
                 Padding = new Padding(8, 8, 8, 5)
             };
-            _mappingPublishButton = CreateMappingActionButton("发布到机台", 120);
-            _mappingValidateButton = CreateMappingActionButton("验证预览", 110);
-            _mappingSaveDraftButton = CreateMappingActionButton("保存草稿", 100);
-            _mappingHistoryButton = CreateMappingActionButton("历史版本 / 回滚", 145);
-            actions.Controls.Add(_mappingPublishButton);
-            actions.Controls.Add(_mappingValidateButton);
-            actions.Controls.Add(_mappingSaveDraftButton);
-            actions.Controls.Add(_mappingHistoryButton);
+            _mappingSaveButton = CreateMappingActionButton("保存", 100);
+            actions.Controls.Add(_mappingSaveButton);
             panel3.Controls.Add(actions);
         }
 
@@ -427,10 +431,7 @@ namespace MachineDataAcquisitionSystem.Forms
             _mappingPickLocatorButton.Click += MappingPickLocatorButton_Click;
             _mappingLocalAssistButton.Click += MappingLocalAssistButton_Click;
             _mappingAiAssistButton.Click += MappingAiAssistButton_Click;
-            _mappingSaveDraftButton.Click += MappingSaveDraftButton_Click;
-            _mappingValidateButton.Click += MappingValidateButton_Click;
-            _mappingPublishButton.Click += MappingPublishButton_Click;
-            _mappingHistoryButton.Click += MappingHistoryButton_Click;
+            _mappingSaveButton.Click += MappingSaveButton_Click;
             _mappingDeleteButton.Click += MappingDeleteButton_Click;
             dataGridView1.CellValueChanged += MappingGrid_CellValueChanged;
             dataGridView1.SelectionChanged += MappingGrid_SelectionChanged;
@@ -472,6 +473,8 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 RefreshMappingAiConfiguration();
                 LoadMappingModels();
+                LoadMappingMachineCheckboxes(
+                    _mappingCurrentVersion == null ? (long?)null : _mappingCurrentVersion.DefinitionId);
                 UpdateMappingCommandState();
                 return;
             }
@@ -484,6 +487,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 _mappingLocalAssistant = new LocalMappingAssistant();
                 RefreshMappingAiConfiguration();
                 LoadMappingModels();
+                LoadMappingMachineCheckboxes();
                 RefreshMappingDefinitionList(null);
                 _mappingDataLoaded = true;
 
@@ -557,6 +561,7 @@ namespace MachineDataAcquisitionSystem.Forms
             IReadOnlyList<ModelCatalogItem> models = new ModelCatalogService(DatabaseHelper.GetConnectionString())
                 .LoadActiveModels();
 
+            bool previouslySuppressingEvents = _mappingSuppressEvents;
             _mappingSuppressEvents = true;
             _mappingModelCombo.Items.Clear();
             int selectedIndex = -1;
@@ -576,7 +581,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 _mappingModelCombo.SelectedIndex = selectedIndex;
             else if (_mappingModelCombo.Items.Count > 0)
                 _mappingModelCombo.SelectedIndex = 0;
-            _mappingSuppressEvents = false;
+            _mappingSuppressEvents = previouslySuppressingEvents;
         }
 
         private List<ModelSchemaField> LoadMappingFields(int modelId)
@@ -622,9 +627,7 @@ ORDER BY Id;";
                 command.CommandText = @"
 SELECT Id, MachineName, MachineCode
 FROM Machines
-WHERE IsEnabled = @IsEnabled
 ORDER BY SortOrder, Id;";
-                command.Parameters.Add("@IsEnabled", DbType.Int32).Value = 1;
                 using (SQLiteDataReader reader = command.ExecuteReader())
                 {
                     while (reader.Read())
@@ -641,30 +644,141 @@ ORDER BY SortOrder, Id;";
             return machines;
         }
 
+        private void LoadMappingMachineCheckboxes(long? definitionId = null)
+        {
+            if (_mappingMachinePanel == null) return;
+
+            HashSet<string> publishedMachineIds = definitionId.HasValue && _mappingRuleStore != null
+                ? new HashSet<string>(
+                    _mappingRuleStore.GetPublishedMachineIds(definitionId.Value),
+                    StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
+
+            bool previouslySuppressingEvents = _mappingSuppressEvents;
+            _mappingSuppressEvents = true;
+            _mappingMachinePanel.SuspendLayout();
+            try
+            {
+                _mappingMachinePanel.Controls.Clear();
+                var selectAll = new CheckBox
+                {
+                    AutoSize = true,
+                    Text = "全选",
+                    Tag = "all"
+                };
+                selectAll.CheckedChanged += MappingSelectAllMachines_CheckedChanged;
+                _mappingMachinePanel.Controls.Add(selectAll);
+
+                var clearAll = new CheckBox
+                {
+                    AutoSize = true,
+                    Text = "取消全选",
+                    Tag = "clear"
+                };
+                clearAll.CheckedChanged += MappingClearAllMachines_CheckedChanged;
+                _mappingMachinePanel.Controls.Add(clearAll);
+
+                foreach (MappingMachineChoice machine in LoadMappingMachines())
+                {
+                    var checkBox = new CheckBox
+                    {
+                        AutoSize = true,
+                        Text = machine.ToString(),
+                        Tag = machine,
+                        Checked = publishedMachineIds.Contains(
+                            machine.Id.ToString(CultureInfo.InvariantCulture))
+                    };
+                    checkBox.CheckedChanged += MappingMachine_CheckedChanged;
+                    _mappingMachinePanel.Controls.Add(checkBox);
+                }
+            }
+            finally
+            {
+                _mappingMachinePanel.ResumeLayout(true);
+                _mappingSuppressEvents = previouslySuppressingEvents;
+            }
+        }
+
+        private void MappingSelectAllMachines_CheckedChanged(object sender, EventArgs e)
+        {
+            var selectAll = sender as CheckBox;
+            if (selectAll == null || !selectAll.Checked) return;
+            SetAllMappingMachinesChecked(true);
+            selectAll.Checked = false;
+        }
+
+        private void MappingClearAllMachines_CheckedChanged(object sender, EventArgs e)
+        {
+            var clearAll = sender as CheckBox;
+            if (clearAll == null || !clearAll.Checked) return;
+            SetAllMappingMachinesChecked(false);
+            clearAll.Checked = false;
+        }
+
+        private void SetAllMappingMachinesChecked(bool isChecked)
+        {
+            foreach (Control control in _mappingMachinePanel.Controls)
+            {
+                var checkBox = control as CheckBox;
+                if (checkBox != null && checkBox.Tag is MappingMachineChoice)
+                    checkBox.Checked = isChecked;
+            }
+            UpdateMappingCommandState();
+        }
+
+        private void MappingMachine_CheckedChanged(object sender, EventArgs e)
+        {
+            if (!_mappingSuppressEvents)
+                UpdateMappingCommandState();
+        }
+
+        private List<MappingMachineChoice> GetSelectedMappingMachines()
+        {
+            return _mappingMachinePanel.Controls
+                .Cast<Control>()
+                .OfType<CheckBox>()
+                .Where(checkBox => checkBox.Checked)
+                .Select(checkBox => checkBox.Tag as MappingMachineChoice)
+                .Where(machine => machine != null)
+                .ToList();
+        }
+
         private void RefreshMappingDefinitionList(long? selectedDefinitionId)
         {
-            var items = new List<MappingDefinitionListItem>();
+            var versions = new List<ParseRuleVersion>();
             using (var connection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
             using (var command = connection.CreateCommand())
             {
                 connection.Open();
                 command.CommandText = MappingVersionSelectSql + @"
 WHERE v.RuleType = @RuleType
-  AND v.VersionNumber = (
-      SELECT MAX(v2.VersionNumber)
-      FROM ParseRuleVersions v2
-      WHERE v2.DefinitionId = v.DefinitionId)
-ORDER BY d.UpdatedTime DESC, d.Id DESC;";
+  AND (
+      v.VersionNumber = (
+          SELECT MAX(v2.VersionNumber)
+          FROM ParseRuleVersions v2
+          WHERE v2.DefinitionId = v.DefinitionId)
+      OR v.VersionNumber = (
+          SELECT MAX(v3.VersionNumber)
+          FROM ParseRuleVersions v3
+          WHERE v3.DefinitionId = v.DefinitionId
+            AND v3.Status IN (@ValidatedStatus, @PublishedStatus)))
+ORDER BY d.UpdatedTime DESC, d.Id DESC, v.VersionNumber DESC;";
                 command.Parameters.Add("@RuleType", DbType.Int32).Value = (int)ParseRuleType.Mapping;
+                command.Parameters.Add("@ValidatedStatus", DbType.Int32).Value = (int)ParseRuleStatus.Validated;
+                command.Parameters.Add("@PublishedStatus", DbType.Int32).Value = (int)ParseRuleStatus.Published;
                 using (SQLiteDataReader reader = command.ExecuteReader())
                 {
                     while (reader.Read())
-                    {
-                        ParseRuleVersion version = ReadMappingVersion(reader);
-                        items.Add(new MappingDefinitionListItem(version));
-                    }
+                        versions.Add(ReadMappingVersion(reader));
                 }
             }
+
+            List<MappingDefinitionListItem> items = versions
+                .GroupBy(version => version.DefinitionId)
+                .Select(group => MappingSavePolicy.SelectPreferredEditorVersion(group))
+                .Where(version => version != null)
+                .Select(version => new MappingDefinitionListItem(version))
+                .ToList();
 
             _mappingSuppressEvents = true;
             listBoxMappingScripts.BeginUpdate();
@@ -801,6 +915,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingSamplePathTextBox.Clear();
             _mappingSheetCombo.Items.Clear();
             _mappingExtensionLabel.Text = "扩展名：-";
+            LoadMappingMachineCheckboxes();
             _mappingModelCombo.Enabled = true;
             if (_mappingModelCombo.Items.Count > 0 && _mappingModelCombo.SelectedIndex < 0)
                 _mappingModelCombo.SelectedIndex = 0;
@@ -878,6 +993,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingExtensionLabel.Text = "扩展名：" + definition.NormalizedExtension;
                 LoadMappingSheetChoices(definition.SheetName);
                 PopulateMappingRows(definition.ModelId, definition);
+                LoadMappingMachineCheckboxes(version.DefinitionId);
                 _mappingSuppressEvents = false;
 
                 _mappingDirty = false;
@@ -1109,7 +1225,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 string target = CellText(dataGridView1.Rows[_mappingPickTargetRowIndex], MappingTargetFieldColumn);
                 CancelMappingPointSelection(false);
                 SetMappingStatus(
-                    "已为 " + target + " 计算定位参数并标记为人工确认；请用验证预览核对",
+                    "已为 " + target + " 计算定位参数并标记为人工确认；保存时会自动验证",
                     Color.DarkGreen);
             }
             catch (Exception ex)
@@ -1734,30 +1850,155 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             return applied;
         }
 
-        private void MappingSaveDraftButton_Click(object sender, EventArgs e)
+        private void MappingSaveButton_Click(object sender, EventArgs e)
         {
             try
             {
-                MappingRuleDefinition definition = BuildMappingDefinition(false);
-                if (MappingDefinitionMatchesCurrentVersion(definition) &&
-                    _mappingCurrentVersion.Status == ParseRuleStatus.Draft)
+                List<MappingMachineChoice> selectedMachines = GetSelectedMappingMachines();
+                if (selectedMachines.Count == 0)
+                    throw new MappingValidationException("请至少勾选一台适用机台后再保存。");
+
+                bool requiresSample = MappingSavePolicy.RequiresSample(
+                    _mappingCurrentVersion,
+                    _mappingDirty);
+                MappingRuleDefinition definition;
+                MappingPreviewResult preview = null;
+                if (requiresSample)
                 {
-                    SetMappingStatus("当前草稿内容已经保存", Color.DarkGreen);
-                    return;
+                    if (_mappingSnapshot == null || string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
+                        throw new MappingValidationException(
+                            _mappingCurrentVersion == null || _mappingDirty
+                                ? "映射内容有修改，保存前必须选择只读 Excel 样本进行自动验证。"
+                                : "当前映射版本尚未验证，必须选择只读 Excel 样本完成验证后才能保存。");
+
+                    EnsureMappedRowsHumanConfirmed();
+                    definition = BuildMappingDefinition(true);
+                    preview = _mappingPreviewService.Preview(
+                        _mappingSamplePathTextBox.Text,
+                        definition);
+                    DisplayMappingPreview(preview);
+                    if (!preview.IsValid)
+                    {
+                        throw new MappingValidationException(
+                            "样本自动验证未通过：" + string.Join(", ", preview.ErrorCodes));
+                    }
+
+                    definition.TemplateSignature = preview.TemplateSignature;
+                    _mappingTemplateSignature = preview.TemplateSignature;
+                    string derivedScriptCode = new MappingScriptGenerator().Generate(definition);
+                    ScriptEngine.ValidateCompilation(derivedScriptCode, definition.ModelId);
+                }
+                else
+                {
+                    definition = _mappingCurrentDefinition;
+                    if (definition == null)
+                        throw new ParseRuleStateException("当前字段映射尚未完成验证，请选择样本后保存。");
                 }
 
-                SaveMappingDraft(definition);
+                var expectedBindings = new Dictionary<int, ParseRuleVersion>();
+                var conflicts = new List<string>();
+                foreach (MappingMachineChoice machine in selectedMachines)
+                {
+                    ParseRuleVersion existing = _mappingRuleStore.GetPublished(
+                        machine.Id.ToString(CultureInfo.InvariantCulture),
+                        definition.NormalizedExtension);
+                    expectedBindings[machine.Id] = existing;
+                    if (existing != null &&
+                        (definition.DefinitionId <= 0 || existing.DefinitionId != definition.DefinitionId))
+                    {
+                        conflicts.Add(string.Format(
+                            CultureInfo.InvariantCulture,
+                            "{0}：{1} v{2}",
+                            machine,
+                            existing.RuleName,
+                            existing.VersionNumber));
+                    }
+                }
+
+                if (conflicts.Count > 0)
+                {
+                    DialogResult confirmation = MessageBox.Show(
+                        this,
+                        "以下机台在相同扩展名上已有其他字段映射：\r\n\r\n" +
+                        string.Join("\r\n", conflicts) +
+                        "\r\n\r\n是否确认覆盖这些机台的现有映射？",
+                        "保存冲突确认",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Warning);
+                    if (confirmation != DialogResult.Yes) return;
+                }
+
+                if (requiresSample &&
+                    (!MappingDefinitionMatchesCurrentVersion(definition) ||
+                     _mappingCurrentVersion.Status == ParseRuleStatus.Superseded))
+                {
+                    SaveMappingDraft(definition);
+                }
+
+                if (requiresSample && _mappingCurrentVersion.Status == ParseRuleStatus.Draft)
+                {
+                    _mappingCurrentVersion = _mappingRuleStore.Validate(
+                        _mappingCurrentVersion.Id,
+                        _mappingCurrentVersion.Revision,
+                        BuildMappingValidationSummary(preview));
+                    _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(
+                        _mappingCurrentVersion.DefinitionJson);
+                }
+
+                Dictionary<string, ParseRuleVersion> previouslyPublished =
+                    _mappingRuleStore.GetPublishedMachineIds(_mappingCurrentVersion.DefinitionId)
+                        .ToDictionary(
+                            machineId => machineId,
+                            machineId => _mappingRuleStore.GetPublished(
+                                machineId,
+                                _mappingCurrentVersion.NormalizedExtension),
+                            StringComparer.Ordinal);
+
+                ParseRuleVersion current = _mappingRuleStore.PublishToMachines(
+                    _mappingCurrentVersion.Id,
+                    selectedMachines
+                        .Select(machine => machine.Id.ToString(CultureInfo.InvariantCulture))
+                        .ToArray(),
+                    _mappingCurrentVersion.Revision,
+                    expectedBindings.Values.Any(version => version != null),
+                    expectedBindings.ToDictionary(
+                        item => item.Key.ToString(CultureInfo.InvariantCulture),
+                        item => item.Value == null ? (long?)null : item.Value.Id,
+                        StringComparer.Ordinal));
+
+                foreach (long replacedVersionId in previouslyPublished.Values
+                    .Concat(expectedBindings.Values)
+                    .Where(version => version != null && version.Id != current.Id)
+                    .Select(version => version.Id)
+                    .Distinct())
+                {
+                    ScriptEngine.ClearCache(replacedVersionId);
+                }
+                ScriptEngine.ClearCache(current.Id);
+
+                _mappingCurrentVersion = current;
+                _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(current.DefinitionJson);
+                _mappingDirty = false;
+                RefreshMappingDefinitionList(current.DefinitionId);
+                LoadMappingMachineCheckboxes(current.DefinitionId);
                 SetMappingStatus(
                     string.Format(
                         CultureInfo.InvariantCulture,
-                        "草稿已保存：v{0}，修订 {1}",
-                        _mappingCurrentVersion.VersionNumber,
-                        _mappingCurrentVersion.Revision),
+                        "保存成功：已应用到 {0} 台机台，版本 v{1}",
+                        selectedMachines.Count,
+                        current.VersionNumber),
                     Color.DarkGreen);
+                UpdateMappingCommandState();
+                MessageBox.Show(
+                    this,
+                    string.Format(CultureInfo.InvariantCulture, "保存成功，当前适用于 {0} 台机台。", selectedMachines.Count),
+                    "保存完成",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                ShowMappingError("保存草稿失败", ex);
+                ShowMappingError("保存字段映射失败", ex);
             }
         }
 
@@ -1975,77 +2216,6 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 StringComparison.Ordinal);
         }
 
-        private void MappingValidateButton_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                if (_mappingSnapshot == null || string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
-                    throw new MappingValidationException("验证预览必须选择只读 Excel 样本。");
-
-                EnsureMappedRowsHumanConfirmed();
-                MappingRuleDefinition definition = BuildMappingDefinition(true);
-                MappingPreviewResult preview = _mappingPreviewService.Preview(
-                    _mappingSamplePathTextBox.Text,
-                    definition);
-                DisplayMappingPreview(preview);
-                if (!preview.IsValid)
-                {
-                    string errors = string.Join(", ", preview.ErrorCodes);
-                    SetMappingStatus("验证未通过：" + errors, Color.Firebrick);
-                    MessageBox.Show(
-                        "验证预览未通过，草稿状态未推进。\r\n\r\n" + errors,
-                        "验证预览",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                    return;
-                }
-
-                definition.TemplateSignature = preview.TemplateSignature;
-                _mappingTemplateSignature = preview.TemplateSignature;
-                if (!MappingDefinitionMatchesCurrentVersion(definition) ||
-                    _mappingCurrentVersion.Status == ParseRuleStatus.Superseded)
-                {
-                    SaveMappingDraft(definition);
-                }
-
-                ScriptEngine.ValidateCompilation(
-                    _mappingCurrentVersion.DerivedScriptCode,
-                    _mappingCurrentVersion.ModelId);
-
-                if (_mappingCurrentVersion.Status == ParseRuleStatus.Draft)
-                {
-                    string summary = BuildMappingValidationSummary(preview);
-                    _mappingCurrentVersion = _mappingRuleStore.Validate(
-                        _mappingCurrentVersion.Id,
-                        _mappingCurrentVersion.Revision,
-                        summary);
-                    _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(
-                        _mappingCurrentVersion.DefinitionJson);
-                }
-
-                _mappingDirty = false;
-                RefreshMappingDefinitionList(_mappingCurrentVersion.DefinitionId);
-                SetMappingStatus(
-                    string.Format(
-                        CultureInfo.InvariantCulture,
-                        "验证通过：{0} 个字段，样本 {1}，模板 {2}",
-                        preview.Fields.Count,
-                        ShortHash(preview.SampleSha256),
-                        ShortHash(preview.TemplateSignature)),
-                    Color.DarkGreen);
-                UpdateMappingCommandState();
-                MessageBox.Show(
-                    "验证预览通过。原值、转换结果和验证状态已分别显示在映射网格中。",
-                    "验证预览",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                ShowMappingError("验证预览失败", ex);
-            }
-        }
-
         private void DisplayMappingPreview(MappingPreviewResult preview)
         {
             foreach (DataGridViewRow row in dataGridView1.Rows)
@@ -2093,160 +2263,6 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 string.Join(",", preview.WarningCodes));
         }
 
-        private void MappingPublishButton_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                if (_mappingCurrentVersion == null ||
-                    (_mappingCurrentVersion.Status != ParseRuleStatus.Validated &&
-                     _mappingCurrentVersion.Status != ParseRuleStatus.Published))
-                    throw new ParseRuleStateException("请先保存草稿并完成验证预览。");
-                if (_mappingDirty)
-                    throw new ParseRuleStateException("当前界面有未保存修改；请重新保存并验证后再发布。");
-                if (_mappingCurrentDefinition == null ||
-                    _mappingCurrentDefinition.Fields.Any(
-                        field => field.ConfirmationState != MappingConfirmationState.HumanConfirmed))
-                    throw new ParseRuleStateException("发布前必须逐项人工确认所有已映射字段。");
-
-                MappingModelChoice model = GetSelectedMappingModel();
-                if (model == null)
-                    throw new MappingValidationException("当前模型不存在。");
-                string currentSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(model.Id));
-                if (!string.Equals(currentSchemaHash, _mappingCurrentVersion.ModelSchemaHash, StringComparison.Ordinal))
-                    throw new ParseRuleStateException("模型结构已变化；必须基于新结构重新保存并验证草稿。");
-
-                List<MappingMachineChoice> selectedMachines = ShowMappingMachineSelection();
-                if (selectedMachines == null || selectedMachines.Count == 0) return;
-
-                var publishedByMachine = new Dictionary<int, ParseRuleVersion>();
-                var conflicts = new List<string>();
-                foreach (MappingMachineChoice machine in selectedMachines)
-                {
-                    ParseRuleVersion existing = _mappingRuleStore.GetPublished(
-                        machine.Id.ToString(CultureInfo.InvariantCulture),
-                        _mappingCurrentVersion.NormalizedExtension);
-                    publishedByMachine[machine.Id] = existing;
-                    if (existing != null && existing.Id != _mappingCurrentVersion.Id)
-                    {
-                        conflicts.Add(string.Format(
-                            CultureInfo.InvariantCulture,
-                            "{0}：{1} v{2}",
-                            machine,
-                            existing.RuleName,
-                            existing.VersionNumber));
-                    }
-                }
-
-                if (conflicts.Count > 0)
-                {
-                    DialogResult confirmation = MessageBox.Show(
-                        "以下机台在相同扩展名上已有发布规则：\r\n\r\n" +
-                        string.Join("\r\n", conflicts) +
-                        "\r\n\r\n是否确认覆盖这些绑定？",
-                        "发布冲突确认",
-                        MessageBoxButtons.YesNo,
-                        MessageBoxIcon.Warning);
-                    if (confirmation != DialogResult.Yes) return;
-                }
-
-                ParseRuleVersion current = _mappingRuleStore.Publish(
-                    _mappingCurrentVersion.Id,
-                    selectedMachines
-                        .Select(machine => machine.Id.ToString(CultureInfo.InvariantCulture))
-                        .ToArray(),
-                    _mappingCurrentVersion.Revision,
-                    conflicts.Count > 0,
-                    publishedByMachine.ToDictionary(
-                        item => item.Key.ToString(CultureInfo.InvariantCulture),
-                        item => item.Value == null ? (long?)null : item.Value.Id,
-                        StringComparer.Ordinal));
-
-                foreach (long replacedVersionId in publishedByMachine.Values
-                    .Where(version => version != null && version.Id != current.Id)
-                    .Select(version => version.Id)
-                    .Distinct())
-                {
-                    ScriptEngine.ClearCache(replacedVersionId);
-                }
-                ScriptEngine.ClearCache(current.Id);
-
-                _mappingCurrentVersion = current;
-                _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(current.DefinitionJson);
-                RefreshMappingDefinitionList(current.DefinitionId);
-                SetMappingStatus(
-                    string.Format(CultureInfo.InvariantCulture, "已发布到 {0} 台机台；版本 v{1}", selectedMachines.Count, current.VersionNumber),
-                    Color.DarkGreen);
-                UpdateMappingCommandState();
-                MessageBox.Show(
-                    string.Format(CultureInfo.InvariantCulture, "发布完成，共更新 {0} 台机台。", selectedMachines.Count),
-                    "发布完成",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                ShowMappingError("发布失败", ex);
-            }
-        }
-
-        private List<MappingMachineChoice> ShowMappingMachineSelection()
-        {
-            List<MappingMachineChoice> machines = LoadMappingMachines();
-            if (machines.Count == 0)
-            {
-                MessageBox.Show("没有启用的机台可供发布。", "发布到机台", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return null;
-            }
-
-            using (var dialog = new Form
-            {
-                Text = "选择发布机台",
-                StartPosition = FormStartPosition.CenterParent,
-                Width = 470,
-                Height = 480,
-                MinimizeBox = false,
-                MaximizeBox = false,
-                ShowInTaskbar = false
-            })
-            {
-                var list = new CheckedListBox
-                {
-                    Dock = DockStyle.Fill,
-                    CheckOnClick = true,
-                    IntegralHeight = false
-                };
-                foreach (MappingMachineChoice machine in machines)
-                    list.Items.Add(machine, false);
-
-                var message = new Label
-                {
-                    Dock = DockStyle.Top,
-                    Height = 48,
-                    Padding = new Padding(8),
-                    Text = "选择一个或多个机台。相同扩展名的现有规则会在下一步单独提示冲突。"
-                };
-                var buttons = new FlowLayoutPanel
-                {
-                    Dock = DockStyle.Bottom,
-                    Height = 48,
-                    FlowDirection = FlowDirection.RightToLeft,
-                    Padding = new Padding(6)
-                };
-                var ok = new Button { Text = "确定", DialogResult = DialogResult.OK, Width = 90 };
-                var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 90 };
-                buttons.Controls.Add(ok);
-                buttons.Controls.Add(cancel);
-                dialog.Controls.Add(list);
-                dialog.Controls.Add(message);
-                dialog.Controls.Add(buttons);
-                dialog.AcceptButton = ok;
-                dialog.CancelButton = cancel;
-
-                if (dialog.ShowDialog(this) != DialogResult.OK) return null;
-                return list.CheckedItems.Cast<MappingMachineChoice>().ToList();
-            }
-        }
-
         private void MappingHistoryButton_Click(object sender, EventArgs e)
         {
             if (_mappingCurrentVersion == null) return;
@@ -2272,7 +2288,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             if (_mappingDirty && !ConfirmDiscardMappingChanges()) return;
             if (MessageBox.Show(
                     this,
-                    "确定删除字段映射“" + (_mappingCurrentVersion.RuleName ?? "当前映射") + "”及其全部历史版本吗？未发布映射删除后不可恢复。",
+                    "确定删除字段映射“" + (_mappingCurrentVersion.RuleName ?? "当前映射") + "”吗？其机台发布绑定和所有版本数据会一并删除，且不可恢复。",
                     "确认删除映射",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning) != DialogResult.Yes) return;
@@ -2560,14 +2576,14 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void UpdateMappingCommandState()
         {
-            if (_mappingSaveDraftButton == null) return;
+            if (_mappingSaveButton == null) return;
             bool ready = _mappingDataLoaded && _mappingRuleStore != null;
             bool hasModel = GetSelectedMappingModel() != null;
             bool hasSample = _mappingSnapshot != null && GetSelectedMappingSheet() != null;
             bool hasDefinition = _mappingCurrentVersion != null;
-            bool publishable = hasDefinition && !_mappingDirty &&
-                (_mappingCurrentVersion.Status == ParseRuleStatus.Validated ||
-                 _mappingCurrentVersion.Status == ParseRuleStatus.Published);
+            bool canReuseValidatedVersion = !MappingSavePolicy.RequiresSample(
+                _mappingCurrentVersion,
+                _mappingDirty);
 
             _mappingBrowseButton.Enabled = ready && !_mappingAiBusy;
             _mappingModelCombo.Enabled = ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
@@ -2588,10 +2604,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingAiOptions == null
                     ? (_mappingAiUnavailableReason ?? "AI 未配置")
                     : "仅填充空白且未确认项；返回失败时不修改草稿");
-            _mappingSaveDraftButton.Enabled = ready && hasModel && !_mappingAiBusy;
-            _mappingValidateButton.Enabled = ready && hasModel && hasSample && !_mappingAiBusy;
-            _mappingPublishButton.Enabled = ready && publishable && !_mappingAiBusy;
-            _mappingHistoryButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
+            _mappingSaveButton.Enabled = ready && hasModel && !_mappingAiBusy &&
+                (hasSample || canReuseValidatedVersion);
             _mappingDeleteButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
         }
 

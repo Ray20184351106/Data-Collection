@@ -918,7 +918,7 @@ namespace MachineDataAcquisitionSystem
                         cancellationToken.ThrowIfCancellationRequested();
                         await FillDefaultValues(model);
                         cancellationToken.ThrowIfCancellationRequested();
-                        batchItem = AddToBatch(machineId, model, cancellationToken);
+                        batchItem = AddToBatch(machineId, script.ModelId, model, cancellationToken);
                         AddLog($"[机台{machineId}] 数据已加入批量队列", LogLevel.Success);
                         //if (!saveSuccess)
                         //{
@@ -1092,7 +1092,7 @@ namespace MachineDataAcquisitionSystem
         /// <summary>
         /// 保存数据到服务器数据库
         /// </summary>
-        private async Task<bool> SaveToServerDatabase(object model)
+        private async Task<bool> SaveToServerDatabase(object model, int modelId)
         {
             try
             {
@@ -1177,6 +1177,18 @@ namespace MachineDataAcquisitionSystem
                     IsAutoCloseConnection = true
                 }))
                 {
+                    TargetTableProvisionResult provision = new TargetTableProvisioner()
+                        .EnsureTable(
+                            db,
+                            model.GetType(),
+                            new TargetTableSchemaLoader(DatabaseHelper.GetConnectionString()).Load(modelId));
+                    if (provision.Created)
+                        AddLog("已自动创建主数据库目标表：" + provision.TableName, LogLevel.Success);
+                    else if (provision.AdjustedColumnCount > 0)
+                        AddLog(
+                            string.Format("已按模型配置修正目标表 {0} 的 {1} 个字段", provision.TableName, provision.AdjustedColumnCount),
+                            LogLevel.Success);
+
                     int result = await db.InsertableByObject(model).ExecuteCommandAsync();
                     return result > 0;
                 }
@@ -1302,6 +1314,8 @@ namespace MachineDataAcquisitionSystem
                     return DbType.PostgreSQL;
                 case "oracle":
                     return DbType.Oracle;
+                case "sqlite":
+                    return DbType.Sqlite;
                 default:
                     return DbType.SqlServer;
             }
@@ -1883,6 +1897,7 @@ VALUES
         private class BatchItem
         {
             public int MachineId { get; set; }
+            public int ModelId { get; set; }
             public object Model { get; set; }
             public CancellationToken CancellationToken { get; set; }
             public bool IsReadyToPersist { get; set; }
@@ -1915,7 +1930,11 @@ VALUES
         /// <summary>
         /// 添加数据到批量队列
         /// </summary>
-        private BatchItem AddToBatch(int machineId, object model, CancellationToken cancellationToken)
+        private BatchItem AddToBatch(
+            int machineId,
+            int modelId,
+            object model,
+            CancellationToken cancellationToken)
         {
             if (model == null) return null;
 
@@ -1925,6 +1944,7 @@ VALUES
                 var batchItem = new BatchItem
                 {
                     MachineId = machineId,
+                    ModelId = modelId,
                     Model = model,
                     CancellationToken = cancellationToken,
                     IsReadyToPersist = false
@@ -2019,19 +2039,38 @@ VALUES
                     IsAutoCloseConnection = true
                 }))
                 {
+                    var groups = dataToSave.GroupBy(x => new
+                    {
+                        ModelType = x.Model.GetType(),
+                        x.ModelId
+                    }).ToList();
+                    var provisioner = new TargetTableProvisioner();
+                    var schemaLoader = new TargetTableSchemaLoader(DatabaseHelper.GetConnectionString());
+                    foreach (var group in groups)
+                    {
+                        TargetTableProvisionResult provision = provisioner.EnsureTable(
+                            db,
+                            group.Key.ModelType,
+                            schemaLoader.Load(group.Key.ModelId));
+                        if (provision.Created)
+                            AddLog("已自动创建主数据库目标表：" + provision.TableName, LogLevel.Success);
+                        else if (provision.AdjustedColumnCount > 0)
+                            AddLog(
+                                string.Format("已按模型配置修正目标表 {0} 的 {1} 个字段", provision.TableName, provision.AdjustedColumnCount),
+                                LogLevel.Success);
+                    }
+
                     db.Ado.BeginTran();
                     try
                     {
                         int insertedRows = 0;
-                        // 按类型分组
-                        var groups = dataToSave.GroupBy(x => x.Model.GetType());
 
                         foreach (var group in groups)
                         {
                             var list = group.Select(x => x.Model).ToList();
                             foreach (object model in list)
                                 ModelIdentityInitializer.EnsureCid(model, () => YitIdHelper.NextId());
-                            AddLog($"插入类型 {group.Key.Name}，共 {list.Count} 条", LogLevel.Info);
+                            AddLog($"插入类型 {group.Key.ModelType.Name}，共 {list.Count} 条", LogLevel.Info);
 
                             int result = await db
                                 .InsertableByObject(list)

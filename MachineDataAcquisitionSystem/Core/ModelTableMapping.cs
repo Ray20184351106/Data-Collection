@@ -13,6 +13,22 @@ namespace MachineDataAcquisitionSystem.Core
             return "[SqlSugar.SugarTable(\"" + EscapeCSharpString(tableName.Trim()) + "\")]";
         }
 
+        public static string GetSqlSugarColumnAttribute(
+            int fieldLength,
+            bool isRequired,
+            bool isPrimaryKey,
+            bool isIdentity,
+            string description)
+        {
+            bool isNullable = !isRequired && !isPrimaryKey;
+            return "[SqlSugar.SugarColumn(" +
+                "IsNullable = " + BoolLiteral(isNullable) +
+                ", IsPrimaryKey = " + BoolLiteral(isPrimaryKey) +
+                ", IsIdentity = " + BoolLiteral(isIdentity) +
+                ", Length = " + Math.Max(0, fieldLength) +
+                ", ColumnDescription = \"" + EscapeCSharpString(description ?? string.Empty) + "\")]";
+        }
+
         public static string ApplySqlSugarTableAttribute(string modelSource, string tableName)
         {
             if (string.IsNullOrWhiteSpace(modelSource))
@@ -80,6 +96,11 @@ namespace MachineDataAcquisitionSystem.Core
                 .Replace("\"", "\\\"")
                 .Replace("\r", "\\r")
                 .Replace("\n", "\\n");
+        }
+
+        private static string BoolLiteral(bool value)
+        {
+            return value ? "true" : "false";
         }
     }
 }

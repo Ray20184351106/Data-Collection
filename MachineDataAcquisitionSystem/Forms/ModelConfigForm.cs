@@ -1194,8 +1194,8 @@ namespace MachineDataAcquisitionSystem.Forms
         /// </summary>
         private void GenerateModelClass(ModelConfig model, List<ModelField> fields)
         {
-            // 从数据库读取基类字段配置
-            List<BaseFieldConfig> baseFields = GetBaseFieldsFromDb();
+            TargetTableDefinition targetSchema = new TargetTableSchemaLoader(
+                DatabaseHelper.GetConnectionString()).Load(model.Id);
 
             StringBuilder sb = new StringBuilder();
 
@@ -1203,29 +1203,28 @@ namespace MachineDataAcquisitionSystem.Forms
             sb.AppendLine();
             sb.AppendLine($"namespace MachineDataAcquisitionSystem.Models");
             sb.AppendLine("{");
-            sb.AppendLine($"    {ModelTableMapping.GetSqlSugarTableAttribute(model.TableName)}");
+            sb.AppendLine($"    {ModelTableMapping.GetSqlSugarTableAttribute(targetSchema.TableName)}");
             sb.AppendLine($"    public class {model.ModelName}");
             sb.AppendLine("    {");
 
-            // 添加基类字段（默认值由采集时统一补全）
-            foreach (var field in baseFields)
+            foreach (TargetTableColumnDefinition field in targetSchema.Columns)
             {
                 string propertyType = GetCSharpType(field.FieldType);
+                if (!field.IsRequired && !field.IsPrimaryKey &&
+                    !string.Equals(propertyType, "string", StringComparison.Ordinal))
+                {
+                    propertyType += "?";
+                }
                 sb.AppendLine();
                 sb.AppendLine("        /// <summary>");
                 sb.AppendLine($"        /// {field.Description}");
                 sb.AppendLine("        /// </summary>");
-                sb.AppendLine($"        public {propertyType} {field.FieldName} {{ get; set; }}");
-            }
-
-            // 添加自定义字段
-            foreach (var field in fields)
-            {
-                string propertyType = GetCSharpType(field.FieldType);
-                sb.AppendLine();
-                sb.AppendLine("        /// <summary>");
-                sb.AppendLine($"        /// {field.Description}");
-                sb.AppendLine("        /// </summary>");
+                sb.AppendLine("        " + ModelTableMapping.GetSqlSugarColumnAttribute(
+                    field.FieldLength,
+                    field.IsRequired,
+                    field.IsPrimaryKey,
+                    field.IsIdentity,
+                    field.Description));
                 sb.AppendLine($"        public {propertyType} {field.FieldName} {{ get; set; }}");
             }
 
