@@ -60,6 +60,34 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
         }
 
         [Fact]
+        public void Preview_reads_a_workbook_while_an_editor_holds_it_open_for_writing()
+        {
+            string path = CreateWorkbook(".xlsx", workbook =>
+                workbook.GetSheet("Data").CreateRow(0).CreateCell(0).SetCellValue("SN-001"));
+
+            try
+            {
+                using (FileStream editorHandle = File.Open(
+                    path,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.ReadWrite | FileShare.Delete))
+                {
+                    MappingPreviewResult result = new ExcelMappingPreviewService().Preview(
+                        path,
+                        NewCellRule(".xlsx", "A1", "SN-001"));
+
+                    Assert.True(result.IsValid, string.Join(Environment.NewLine, result.ErrorCodes));
+                    Assert.Equal("SN-001", result.Fields["Value"].Value);
+                }
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        [Fact]
         public void Preview_reads_a_formula_cached_value_without_recalculating_the_formula()
         {
             EnsureFormulaDependencyAvailable();

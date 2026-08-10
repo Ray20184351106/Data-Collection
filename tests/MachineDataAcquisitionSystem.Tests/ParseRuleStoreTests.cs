@@ -86,6 +86,104 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
         }
 
         [Fact]
+        public void PublishToMachines_replaces_the_complete_machine_selection()
+        {
+            string databasePath = NewDatabasePath();
+            try
+            {
+                using (var store = OpenStore(databasePath))
+                {
+                    ParseRuleVersion validated = Validate(store, store.SaveDraft(NewRule("rule-a", "A1")));
+                    ParseRuleVersion firstPublished = store.PublishToMachines(
+                        validated.Id,
+                        new[] { "Machine1", "Machine2" },
+                        validated.Revision);
+
+                    ParseRuleVersion republished = store.PublishToMachines(
+                        firstPublished.Id,
+                        new[] { "Machine2", "Machine3" },
+                        firstPublished.Revision);
+
+                    Assert.Null(store.GetPublished("Machine1", ".xlsx"));
+                    Assert.Equal(republished.Id, store.GetPublished("Machine2", ".xlsx").Id);
+                    Assert.Equal(republished.Id, store.GetPublished("Machine3", ".xlsx").Id);
+                    Assert.Equal(
+                        new[] { "Machine2", "Machine3" },
+                        store.GetPublishedMachineIds(republished.DefinitionId));
+                }
+            }
+            finally
+            {
+                File.Delete(databasePath);
+            }
+        }
+
+        [Fact]
+        public void PublishToMachines_can_clear_every_machine_binding()
+        {
+            string databasePath = NewDatabasePath();
+            try
+            {
+                using (var store = OpenStore(databasePath))
+                {
+                    ParseRuleVersion validated = Validate(store, store.SaveDraft(NewRule("rule-a", "A1")));
+                    ParseRuleVersion published = store.PublishToMachines(
+                        validated.Id,
+                        new[] { "Machine1", "Machine2" },
+                        validated.Revision);
+
+                    ParseRuleVersion unpublished = store.PublishToMachines(
+                        published.Id,
+                        new string[0],
+                        published.Revision);
+
+                    Assert.Equal(ParseRuleStatus.Validated, unpublished.Status);
+                    Assert.Null(store.GetPublished("Machine1", ".xlsx"));
+                    Assert.Null(store.GetPublished("Machine2", ".xlsx"));
+                    Assert.Empty(store.GetPublishedMachineIds(unpublished.DefinitionId));
+                }
+            }
+            finally
+            {
+                File.Delete(databasePath);
+            }
+        }
+
+        [Fact]
+        public void PublishToMachines_keeps_the_previous_selection_when_a_new_machine_conflicts()
+        {
+            string databasePath = NewDatabasePath();
+            try
+            {
+                using (var store = OpenStore(databasePath))
+                {
+                    ParseRuleVersion candidate = Validate(store, store.SaveDraft(NewRule("candidate", "A1")));
+                    candidate = store.PublishToMachines(
+                        candidate.Id,
+                        new[] { "Machine1", "Machine2" },
+                        candidate.Revision);
+
+                    ParseRuleVersion occupied = Validate(store, store.SaveDraft(NewRule("occupied", "B2")));
+                    occupied = store.Publish(occupied.Id, "Machine3", occupied.Revision);
+
+                    Assert.Throws<ParseRuleBindingConflictException>(() =>
+                        store.PublishToMachines(
+                            candidate.Id,
+                            new[] { "Machine2", "Machine3" },
+                            candidate.Revision));
+
+                    Assert.Equal(candidate.Id, store.GetPublished("Machine1", ".xlsx").Id);
+                    Assert.Equal(candidate.Id, store.GetPublished("Machine2", ".xlsx").Id);
+                    Assert.Equal(occupied.Id, store.GetPublished("Machine3", ".xlsx").Id);
+                }
+            }
+            finally
+            {
+                File.Delete(databasePath);
+            }
+        }
+
+        [Fact]
         public void Publish_does_not_overwrite_a_binding_that_changed_after_confirmation()
         {
             string databasePath = NewDatabasePath();

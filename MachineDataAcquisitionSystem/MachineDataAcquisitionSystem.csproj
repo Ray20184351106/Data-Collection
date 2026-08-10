@@ -182,6 +182,8 @@
     <Compile Include="Core\ModelCatalogService.cs" />
     <Compile Include="Core\ModelIdentityInitializer.cs" />
     <Compile Include="Core\ModelTableMapping.cs" />
+    <Compile Include="Core\TargetTableProvisioner.cs" />
+    <Compile Include="Core\TargetTableSchemaLoader.cs" />
     <Compile Include="Core\Mapping\AiMappingResponseValidator.cs" />
     <Compile Include="Core\Mapping\AiMappingClient.cs" />
     <Compile Include="Core\Mapping\ConfigurationDeletionService.cs" />
@@ -189,6 +191,7 @@
     <Compile Include="Core\Mapping\LegacyScriptVersionService.cs" />
     <Compile Include="Core\Mapping\MappingContracts.cs" />
     <Compile Include="Core\Mapping\MappingRuleSerializer.cs" />
+    <Compile Include="Core\Mapping\MappingSavePolicy.cs" />
     <Compile Include="Core\Mapping\MappingRuntime.cs" />
     <Compile Include="Core\Mapping\MappingScriptGenerator.cs" />
     <Compile Include="Core\Mapping\ModelSchemaService.cs" />

@@ -318,8 +318,41 @@ WHERE Id = @Id AND Revision = @ExpectedRevision AND Status = @ExpectedStatus;"))
             bool replaceExisting = false,
             IReadOnlyDictionary<string, long?> expectedExistingBindings = null)
         {
+            return PublishInternal(
+                versionId,
+                machineIds,
+                expectedRevision,
+                replaceExisting,
+                expectedExistingBindings,
+                synchronizeDefinitionBindings: false);
+        }
+
+        public ParseRuleVersion PublishToMachines(
+            long versionId,
+            IReadOnlyCollection<string> machineIds,
+            int expectedRevision,
+            bool replaceExisting = false,
+            IReadOnlyDictionary<string, long?> expectedExistingBindings = null)
+        {
+            return PublishInternal(
+                versionId,
+                machineIds,
+                expectedRevision,
+                replaceExisting,
+                expectedExistingBindings,
+                synchronizeDefinitionBindings: true);
+        }
+
+        private ParseRuleVersion PublishInternal(
+            long versionId,
+            IReadOnlyCollection<string> machineIds,
+            int expectedRevision,
+            bool replaceExisting,
+            IReadOnlyDictionary<string, long?> expectedExistingBindings,
+            bool synchronizeDefinitionBindings)
+        {
             EnsureReady();
-            if (machineIds == null || machineIds.Count == 0)
+            if (machineIds == null || (!synchronizeDefinitionBindings && machineIds.Count == 0))
             {
                 throw new ArgumentException("At least one machine is required for publication.", "machineIds");
             }
@@ -363,6 +396,24 @@ WHERE Id = @Id AND Revision = @ExpectedRevision AND Status = @ExpectedStatus;"))
                     throw new ParseRuleStateException(
                         "Only a validated or already-published parse-rule version can be published.");
                 }
+                if (synchronizeDefinitionBindings &&
+                    normalizedMachineIds.Length == 0 &&
+                    version.Status != ParseRuleStatus.Published)
+                {
+                    throw new ParseRuleStateException(
+                        "Only an already-published parse-rule version can clear every machine binding.");
+                }
+
+                Dictionary<string, long> definitionBindings = synchronizeDefinitionBindings
+                    ? LoadDefinitionBindings(
+                        connection,
+                        transaction,
+                        version.DefinitionId,
+                        version.NormalizedExtension)
+                    : new Dictionary<string, long>(StringComparer.Ordinal);
+                string[] removedMachineIds = definitionBindings.Keys
+                    .Where(machineId => !normalizedMachineIds.Contains(machineId, StringComparer.Ordinal))
+                    .ToArray();
 
                 var existingBindings = new Dictionary<string, long?>(StringComparer.Ordinal);
                 foreach (string normalizedMachineId in normalizedMachineIds)
@@ -393,8 +444,13 @@ WHERE Id = @Id AND Revision = @ExpectedRevision AND Status = @ExpectedStatus;"))
                 }
 
                 bool hasBindingChange = existingBindings.Any(binding =>
-                    !binding.Value.HasValue || binding.Value.Value != versionId);
-                if (!hasBindingChange)
+                    !binding.Value.HasValue || binding.Value.Value != versionId) ||
+                    removedMachineIds.Length > 0;
+                ParseRuleStatus targetStatus = synchronizeDefinitionBindings && normalizedMachineIds.Length == 0
+                    ? ParseRuleStatus.Validated
+                    : ParseRuleStatus.Published;
+                bool hasStatusChange = version.Status != targetStatus;
+                if (!hasBindingChange && !hasStatusChange)
                 {
                     if (version.Status != ParseRuleStatus.Published)
                     {
@@ -453,6 +509,27 @@ VALUES
                     }
                 }
 
+                foreach (string removedMachineId in removedMachineIds)
+                {
+                    long removedVersionId = definitionBindings[removedMachineId];
+                    using (SQLiteCommand command = CreateCommand(connection, transaction, @"
+DELETE FROM PublishedParseRuleBindings
+WHERE MachineId = @MachineId
+  AND NormalizedExtension = @NormalizedExtension
+  AND ParseRuleVersionId = @ExpectedVersionId;"))
+                    {
+                        AddParameter(command, "@MachineId", DbType.String, removedMachineId);
+                        AddParameter(command, "@NormalizedExtension", DbType.String, version.NormalizedExtension);
+                        AddParameter(command, "@ExpectedVersionId", DbType.Int64, removedVersionId);
+                        if (command.ExecuteNonQuery() != 1)
+                        {
+                            throw new ParseRuleBindingConflictException(
+                                "The published parse-rule binding changed while machine selections were being saved.");
+                        }
+                    }
+                    replacedVersionIds.Add(removedVersionId);
+                }
+
                 using (SQLiteCommand command = CreateCommand(connection, transaction, @"
 UPDATE ParseRuleVersions
 SET Status = @Status,
@@ -460,7 +537,7 @@ SET Status = @Status,
     PublishedTime = COALESCE(PublishedTime, @PublishedTime)
 WHERE Id = @Id AND Revision = @ExpectedRevision AND Status IN (@ValidatedStatus, @PublishedStatus);"))
                 {
-                    AddParameter(command, "@Status", DbType.Int32, (int)ParseRuleStatus.Published);
+                    AddParameter(command, "@Status", DbType.Int32, (int)targetStatus);
                     AddParameter(command, "@PublishedTime", DbType.DateTime, now);
                     AddParameter(command, "@Id", DbType.Int64, versionId);
                     AddParameter(command, "@ExpectedRevision", DbType.Int32, expectedRevision);
@@ -515,6 +592,35 @@ WHERE b.MachineId = @MachineId AND b.NormalizedExtension = @NormalizedExtension;
                     return result;
                 }
             }
+        }
+
+        public IReadOnlyList<string> GetPublishedMachineIds(long definitionId)
+        {
+            EnsureReady();
+            if (definitionId <= 0)
+            {
+                throw new ArgumentOutOfRangeException("definitionId");
+            }
+
+            var machineIds = new List<string>();
+            using (SQLiteConnection connection = OpenConnection())
+            using (SQLiteCommand command = CreateCommand(connection, null, @"
+SELECT b.MachineId
+FROM PublishedParseRuleBindings b
+INNER JOIN ParseRuleVersions v ON v.Id = b.ParseRuleVersionId
+WHERE v.DefinitionId = @DefinitionId
+ORDER BY b.MachineId;"))
+            {
+                AddParameter(command, "@DefinitionId", DbType.Int64, definitionId);
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        machineIds.Add(reader.GetString(0));
+                    }
+                }
+            }
+            return machineIds;
         }
 
         public ParseRuleVersion Rollback(
@@ -923,6 +1029,33 @@ WHERE MachineId = @MachineId AND NormalizedExtension = @NormalizedExtension;"))
                 }
                 return Convert.ToInt64(value, CultureInfo.InvariantCulture);
             }
+        }
+
+        private static Dictionary<string, long> LoadDefinitionBindings(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            long definitionId,
+            string normalizedExtension)
+        {
+            var bindings = new Dictionary<string, long>(StringComparer.Ordinal);
+            using (SQLiteCommand command = CreateCommand(connection, transaction, @"
+SELECT b.MachineId, b.ParseRuleVersionId
+FROM PublishedParseRuleBindings b
+INNER JOIN ParseRuleVersions v ON v.Id = b.ParseRuleVersionId
+WHERE v.DefinitionId = @DefinitionId
+  AND b.NormalizedExtension = @NormalizedExtension;"))
+            {
+                AddParameter(command, "@DefinitionId", DbType.Int64, definitionId);
+                AddParameter(command, "@NormalizedExtension", DbType.String, normalizedExtension);
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        bindings.Add(reader.GetString(0), reader.GetInt64(1));
+                    }
+                }
+            }
+            return bindings;
         }
 
         private static void SupersedeIfUnbound(

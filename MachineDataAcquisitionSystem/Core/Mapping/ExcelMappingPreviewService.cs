@@ -13,6 +13,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 {
     public sealed class ExcelMappingPreviewService
     {
+        private const FileShare SharedEditorAccess =
+            FileShare.ReadWrite | FileShare.Delete;
+
         public const long MaximumFileBytes = 20L * 1024L * 1024L;
         public const int MaximumSheets = 10;
         public const int MaximumRows = 2000;
@@ -116,7 +119,11 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         private static bool HasExpectedSignature(string filePath, string extension)
         {
             byte[] header = new byte[8];
-            using (FileStream stream = File.Open(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (FileStream stream = File.Open(
+                filePath,
+                FileMode.Open,
+                FileAccess.Read,
+                SharedEditorAccess))
             {
                 if (stream.Read(header, 0, header.Length) < header.Length) return false;
             }
@@ -140,7 +147,11 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 "MappingPreview_" + Guid.NewGuid().ToString("N") + Path.GetExtension(sourcePath).ToLowerInvariant());
             try
             {
-                using (FileStream source = File.Open(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (FileStream source = File.Open(
+                    sourcePath,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    SharedEditorAccess))
                 using (FileStream destination = File.Open(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                     source.CopyTo(destination);
 
