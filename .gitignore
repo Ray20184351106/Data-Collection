@@ -21,6 +21,7 @@ bld/
 [Ll]ogs/
 **/bin/
 **/obj/
+/outputs/
 
 # NuGet
 packages/
