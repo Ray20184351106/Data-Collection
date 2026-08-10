@@ -24,11 +24,14 @@ namespace MachineDataAcquisitionSystem.Forms
         private List<ParseScript> _scripts = new List<ParseScript>();
         private ParseScript _currentScript;
         private int _currentScriptId = -1;
+        private Button _btnDeleteModel;
+        private Button _btnDeleteScript;
 
         public ModelConfigForm()
         {
             InitializeComponent();
             InitializeMappingUi();
+            InitializeDeletionButtons();
 
             // 绑定事件
             this.Load += ModelConfigForm_Load;
@@ -41,6 +44,102 @@ namespace MachineDataAcquisitionSystem.Forms
             btnSaveScript.Click += BtnSaveScript_Click;
             listBoxScripts.SelectedIndexChanged += ListBoxScripts_SelectedIndexChanged;
             tabControl1.SelectedIndexChanged += tabControl1_SelectedIndexChanged;
+        }
+
+        private void InitializeDeletionButtons()
+        {
+            _btnDeleteModel = new Button
+            {
+                Dock = DockStyle.Bottom,
+                Height = 42,
+                Text = "删除模型",
+                BackColor = Color.MistyRose
+            };
+            _btnDeleteModel.Click += BtnDeleteModel_Click;
+            splitContainer1.Panel1.Controls.Add(_btnDeleteModel);
+
+            _btnDeleteScript = new Button
+            {
+                Dock = DockStyle.Bottom,
+                Height = 42,
+                Text = "删除脚本",
+                BackColor = Color.MistyRose
+            };
+            _btnDeleteScript.Click += BtnDeleteScript_Click;
+            splitContainer2.Panel1.Controls.Add(_btnDeleteScript);
+        }
+
+        private void BtnDeleteModel_Click(object sender, EventArgs e)
+        {
+            if (_currentModelId <= 0 || _currentModel == null)
+            {
+                MessageBox.Show("请先选择要删除的数据模型。", "删除模型", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (MessageBox.Show(
+                    "确定删除数据模型“" + _currentModel.ModelName + "”及其字段吗？此操作不可撤销。",
+                    "确认删除模型",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            try
+            {
+                new ConfigurationDeletionService(DatabaseHelper.GetDatabasePath()).DeleteModel(_currentModelId);
+                DeleteGeneratedModelSource(_currentModel.ModelName);
+                LoadModels();
+                LoadParentModels();
+                BtnAddModel_Click(null, EventArgs.Empty);
+                MessageBox.Show("数据模型已删除。", "删除模型", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (ConfigurationDeletionBlockedException ex)
+            {
+                MessageBox.Show(ex.Message, "无法删除模型", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("删除模型失败：" + ex.Message, "删除模型", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void BtnDeleteScript_Click(object sender, EventArgs e)
+        {
+            if (_currentScriptId <= 0 || _currentScript == null)
+            {
+                MessageBox.Show("请先选择要删除的解析脚本。", "删除脚本", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (MessageBox.Show(
+                    "确定删除解析脚本“" + _currentScript.Name + "”吗？未发布脚本的机台关联和旧字段映射也会一并删除。",
+                    "确认删除脚本",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            try
+            {
+                new ConfigurationDeletionService(DatabaseHelper.GetDatabasePath()).DeleteLegacyScript(_currentScriptId);
+                ScriptEngine.ClearCache();
+                LoadScripts();
+                BtnAddScript_Click(null, EventArgs.Empty);
+                MessageBox.Show("解析脚本已删除。", "删除脚本", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (ConfigurationDeletionBlockedException ex)
+            {
+                MessageBox.Show(ex.Message, "无法删除脚本", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("删除脚本失败：" + ex.Message, "删除脚本", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static void DeleteGeneratedModelSource(string modelName)
+        {
+            if (!MappingRuleSerializer.IsIdentifier(modelName)) return;
+            string directory = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "GeneratedModels"));
+            string source = Path.GetFullPath(Path.Combine(directory, modelName + ".cs"));
+            string prefix = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (source.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && File.Exists(source))
+                File.Delete(source);
         }
 
         private void ModelConfigForm_Load(object sender, EventArgs e)
@@ -342,26 +441,29 @@ namespace MachineDataAcquisitionSystem.Forms
         /// <summary>
         /// 加载模型下拉框
         /// </summary>
-        private void LoadModelCombo()
+        private void LoadModelCombo(int? preferredModelId = null)
         {
+            if (!preferredModelId.HasValue && cmbScriptModel.SelectedItem is ModelItem selectedModel)
+                preferredModelId = selectedModel.Id;
+
             cmbScriptModel.Items.Clear();
-
-            using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+            IReadOnlyList<ModelCatalogItem> models = new ModelCatalogService(DatabaseHelper.GetConnectionString())
+                .LoadActiveModels();
+            int selectedIndex = -1;
+            for (int index = 0; index < models.Count; index++)
             {
-                conn.Open();
-                string sql = "SELECT Id, ModelName FROM DataModels WHERE IsActive = 1 ORDER BY Id";
-
-                using (var cmd = new SQLiteCommand(sql, conn))
-                using (var reader = cmd.ExecuteReader())
+                ModelCatalogItem model = models[index];
+                cmbScriptModel.Items.Add(new ModelItem { Id = model.Id, Name = model.ModelName });
+                if (preferredModelId == model.Id)
                 {
-                    while (reader.Read())
-                    {
-                        cmbScriptModel.Items.Add(new ModelItem { Id = reader.GetInt32(0), Name = reader.GetString(1) });
-                    }
+                    selectedIndex = index;
                 }
             }
 
-            if (cmbScriptModel.Items.Count > 0) cmbScriptModel.SelectedIndex = 0;
+            if (selectedIndex >= 0)
+                cmbScriptModel.SelectedIndex = selectedIndex;
+            else if (cmbScriptModel.Items.Count > 0)
+                cmbScriptModel.SelectedIndex = 0;
         }
 
 
@@ -836,6 +938,9 @@ namespace MachineDataAcquisitionSystem.Forms
 
                 // 刷新列表
                 LoadModels();
+                LoadModelCombo(_currentModelId);
+                if (_mappingDataLoaded)
+                    LoadMappingModels(_currentModelId);
 
                 // 重新选中当前模型
                 for (int i = 0; i < listBoxModels.Items.Count; i++)
@@ -1098,6 +1203,7 @@ namespace MachineDataAcquisitionSystem.Forms
             sb.AppendLine();
             sb.AppendLine($"namespace MachineDataAcquisitionSystem.Models");
             sb.AppendLine("{");
+            sb.AppendLine($"    {ModelTableMapping.GetSqlSugarTableAttribute(model.TableName)}");
             sb.AppendLine($"    public class {model.ModelName}");
             sb.AppendLine("    {");
 

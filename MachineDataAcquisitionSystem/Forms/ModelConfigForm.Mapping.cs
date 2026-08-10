@@ -60,6 +60,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private Button _mappingValidateButton;
         private Button _mappingPublishButton;
         private Button _mappingHistoryButton;
+        private Button _mappingDeleteButton;
         private DataGridView _mappingSampleGrid;
         private SplitContainer _mappingCenterSplit;
         private ToolTip _mappingToolTip;
@@ -91,6 +92,15 @@ namespace MachineDataAcquisitionSystem.Forms
                 panel2.Height = 112;
                 panel3.Height = 62;
                 btnNewMappingScript.Text = "+ 新建映射";
+
+                _mappingDeleteButton = new Button
+                {
+                    Dock = DockStyle.Bottom,
+                    Height = 42,
+                    Text = "删除映射",
+                    BackColor = Color.MistyRose
+                };
+                splitContainer3.Panel1.Controls.Add(_mappingDeleteButton);
 
                 BuildMappingHeader();
                 BuildMappingCenter();
@@ -421,6 +431,7 @@ namespace MachineDataAcquisitionSystem.Forms
             _mappingValidateButton.Click += MappingValidateButton_Click;
             _mappingPublishButton.Click += MappingPublishButton_Click;
             _mappingHistoryButton.Click += MappingHistoryButton_Click;
+            _mappingDeleteButton.Click += MappingDeleteButton_Click;
             dataGridView1.CellValueChanged += MappingGrid_CellValueChanged;
             dataGridView1.SelectionChanged += MappingGrid_SelectionChanged;
             dataGridView1.CurrentCellDirtyStateChanged += MappingGrid_CurrentCellDirtyStateChanged;
@@ -457,7 +468,13 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void ActivateMappingUi()
         {
-            if (_mappingDataLoaded) return;
+            if (_mappingDataLoaded)
+            {
+                RefreshMappingAiConfiguration();
+                LoadMappingModels();
+                UpdateMappingCommandState();
+                return;
+            }
             try
             {
                 var connection = new SQLiteConnectionStringBuilder(DatabaseHelper.GetConnectionString());
@@ -528,38 +545,36 @@ namespace MachineDataAcquisitionSystem.Forms
             }
         }
 
-        private void LoadMappingModels()
+        private void LoadMappingModels(int? preferredModelId = null)
         {
-            var models = new List<MappingModelChoice>();
-            using (var connection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
-            using (var command = connection.CreateCommand())
+            if (!preferredModelId.HasValue)
             {
-                connection.Open();
-                command.CommandText = @"
-SELECT Id, ModelName, TableName
-FROM DataModels
-WHERE IsActive = @IsActive
-ORDER BY ModelName COLLATE BINARY, Id;";
-                command.Parameters.Add("@IsActive", DbType.Int32).Value = 1;
-                using (SQLiteDataReader reader = command.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        models.Add(new MappingModelChoice
-                        {
-                            Id = reader.GetInt32(0),
-                            ModelName = reader.GetString(1),
-                            TableName = reader.GetString(2)
-                        });
-                    }
-                }
+                MappingModelChoice selectedModel = GetSelectedMappingModel();
+                if (selectedModel != null)
+                    preferredModelId = selectedModel.Id;
             }
+
+            IReadOnlyList<ModelCatalogItem> models = new ModelCatalogService(DatabaseHelper.GetConnectionString())
+                .LoadActiveModels();
 
             _mappingSuppressEvents = true;
             _mappingModelCombo.Items.Clear();
-            foreach (MappingModelChoice model in models)
-                _mappingModelCombo.Items.Add(model);
-            if (_mappingModelCombo.Items.Count > 0)
+            int selectedIndex = -1;
+            for (int index = 0; index < models.Count; index++)
+            {
+                ModelCatalogItem model = models[index];
+                _mappingModelCombo.Items.Add(new MappingModelChoice
+                {
+                    Id = model.Id,
+                    ModelName = model.ModelName,
+                    TableName = model.TableName
+                });
+                if (preferredModelId == model.Id)
+                    selectedIndex = index;
+            }
+            if (selectedIndex >= 0)
+                _mappingModelCombo.SelectedIndex = selectedIndex;
+            else if (_mappingModelCombo.Items.Count > 0)
                 _mappingModelCombo.SelectedIndex = 0;
             _mappingSuppressEvents = false;
         }
@@ -2247,6 +2262,40 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             }
         }
 
+        private void MappingDeleteButton_Click(object sender, EventArgs e)
+        {
+            if (_mappingCurrentVersion == null || _mappingCurrentVersion.DefinitionId <= 0)
+            {
+                MessageBox.Show(this, "请先选择要删除的字段映射。", "删除映射", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (_mappingDirty && !ConfirmDiscardMappingChanges()) return;
+            if (MessageBox.Show(
+                    this,
+                    "确定删除字段映射“" + (_mappingCurrentVersion.RuleName ?? "当前映射") + "”及其全部历史版本吗？未发布映射删除后不可恢复。",
+                    "确认删除映射",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning) != DialogResult.Yes) return;
+
+            try
+            {
+                new ConfigurationDeletionService(DatabaseHelper.GetDatabasePath())
+                    .DeleteMappingDefinition(_mappingCurrentVersion.DefinitionId);
+                ScriptEngine.ClearCache();
+                RefreshMappingDefinitionList(null);
+                StartNewMapping(false);
+                SetMappingStatus("字段映射已删除。", Color.DarkGreen);
+            }
+            catch (ConfigurationDeletionBlockedException ex)
+            {
+                MessageBox.Show(this, ex.Message, "无法删除映射", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                ShowMappingError("删除字段映射失败", ex);
+            }
+        }
+
         private void ShowMappingHistoryDialog(
             List<ParseRuleVersion> versions,
             List<MappingMachineChoice> machines)
@@ -2543,11 +2592,13 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingValidateButton.Enabled = ready && hasModel && hasSample && !_mappingAiBusy;
             _mappingPublishButton.Enabled = ready && publishable && !_mappingAiBusy;
             _mappingHistoryButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
+            _mappingDeleteButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
         }
 
         private void SetMappingEditorEnabled(bool enabled)
         {
             btnNewMappingScript.Enabled = enabled;
+            if (_mappingDeleteButton != null) _mappingDeleteButton.Enabled = enabled;
             listBoxMappingScripts.Enabled = enabled;
             panel2.Enabled = enabled;
             panel3.Enabled = enabled;
