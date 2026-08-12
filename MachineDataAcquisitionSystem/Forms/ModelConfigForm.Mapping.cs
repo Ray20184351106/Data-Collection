@@ -10,6 +10,7 @@ using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -22,6 +23,8 @@ namespace MachineDataAcquisitionSystem.Forms
         private const string MappingTargetTypeColumn = "MappingTargetType";
         private const string MappingRequiredColumn = "MappingRequired";
         private const string MappingDescriptionColumn = "MappingDescription";
+        private const string MappingScopeColumn = "MappingScope";
+        private const string MappingKeyColumn = "MappingKey";
         private const string MappingLocatorTypeColumn = "MappingLocatorType";
         private const string MappingLocatorValueColumn = "MappingLocatorValue";
         private const string MappingRowOffsetColumn = "MappingRowOffset";
@@ -56,12 +59,15 @@ namespace MachineDataAcquisitionSystem.Forms
         private Button _mappingPickLocatorButton;
         private Button _mappingLocalAssistButton;
         private Button _mappingAiAssistButton;
+        private Button _mappingFrameTableButton;
         private Button _mappingSaveButton;
         private Button _mappingDeleteButton;
         private FlowLayoutPanel _mappingMachinePanel;
         private DataGridView _mappingSampleGrid;
+        private DataGridView _mappingRecordsGrid;
         private SplitContainer _mappingCenterSplit;
         private ToolTip _mappingToolTip;
+        private ComboBox _mappingModeCombo;
 
         private ParseRuleStore _mappingRuleStore;
         private ExcelMappingPreviewService _mappingPreviewService;
@@ -75,7 +81,9 @@ namespace MachineDataAcquisitionSystem.Forms
         private CancellationTokenSource _mappingAiCancellation;
         private int _mappingPickTargetRowIndex = -1;
         private int _mappingPickAnchorSampleRowIndex = -1;
+        private int _mappingPickAnchorSampleColumnIndex = -1;
         private MappingCellSnapshot _mappingPickAnchorCell;
+        private RepeatedRowDefinition _mappingRepeatedRows;
 
         private void InitializeMappingUi()
         {
@@ -87,7 +95,7 @@ namespace MachineDataAcquisitionSystem.Forms
             splitContainer3.Panel2.SuspendLayout();
             try
             {
-                panel2.Height = 152;
+                panel2.Height = 176;
                 panel3.Height = 62;
                 btnNewMappingScript.Text = "+ 新建映射";
 
@@ -136,7 +144,7 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
 
             _mappingModelCombo = new ComboBox
             {
@@ -175,6 +183,14 @@ namespace MachineDataAcquisitionSystem.Forms
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
+            _mappingModeCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Width = 116
+            };
+            _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.SingleRecord, "单条记录"));
+            _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.RepeatingRows, "重复行表格"));
+            _mappingModeCombo.SelectedIndex = 0;
             _mappingLocalAssistButton = new Button
             {
                 AutoSize = true,
@@ -192,6 +208,12 @@ namespace MachineDataAcquisitionSystem.Forms
                 AutoSize = true,
                 Height = 28,
                 Text = "AI 自动填映射"
+            };
+            _mappingFrameTableButton = new Button
+            {
+                AutoSize = true,
+                Height = 28,
+                Text = "框选表格"
             };
 
             layout.Controls.Add(CreateMappingLabel("模型："), 0, 0);
@@ -217,7 +239,15 @@ namespace MachineDataAcquisitionSystem.Forms
                 WrapContents = false,
                 Margin = new Padding(0)
             };
+            assistants.Controls.Add(new Label
+            {
+                AutoSize = true,
+                Margin = new Padding(0, 7, 3, 0),
+                Text = "模式："
+            });
+            assistants.Controls.Add(_mappingModeCombo);
             assistants.Controls.Add(_mappingPickLocatorButton);
+            assistants.Controls.Add(_mappingFrameTableButton);
             assistants.Controls.Add(_mappingLocalAssistButton);
             assistants.Controls.Add(_mappingAiAssistButton);
             var hint = new Label
@@ -257,25 +287,23 @@ namespace MachineDataAcquisitionSystem.Forms
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
                 AllowUserToResizeRows = false,
-                RowHeadersVisible = false,
-                MultiSelect = false,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                RowHeadersVisible = true,
+                RowHeadersWidth = 56,
+                MultiSelect = true,
+                SelectionMode = DataGridViewSelectionMode.CellSelect,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
                 BackgroundColor = SystemColors.Window
             };
-            _mappingSampleGrid.Columns.Add("SampleCoordinate", "单元格");
-            _mappingSampleGrid.Columns.Add("SampleValue", "样本显示值");
-            _mappingSampleGrid.Columns.Add("SampleType", "类型");
-            _mappingSampleGrid.Columns.Add(new DataGridViewCheckBoxColumn
+            _mappingRecordsGrid = new DataGridView
             {
-                Name = "SampleFormula",
-                HeaderText = "公式",
+                Dock = DockStyle.Fill,
                 ReadOnly = true,
-                FillWeight = 35F
-            });
-            _mappingSampleGrid.Columns[0].FillWeight = 40F;
-            _mappingSampleGrid.Columns[1].FillWeight = 160F;
-            _mappingSampleGrid.Columns[2].FillWeight = 55F;
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                RowHeadersVisible = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells,
+                BackgroundColor = SystemColors.Window
+            };
 
             _mappingCenterSplit = new SplitContainer
             {
@@ -286,12 +314,16 @@ namespace MachineDataAcquisitionSystem.Forms
                 Panel1MinSize = 90,
                 Panel2MinSize = 140
             };
-            var sampleGroup = new GroupBox
+            var sampleTabs = new TabControl
             {
-                Dock = DockStyle.Fill,
-                Text = "样本内容（只读）"
+                Dock = DockStyle.Fill
             };
-            sampleGroup.Controls.Add(_mappingSampleGrid);
+            var samplePage = new TabPage("Excel 样本（可框选）");
+            var recordsPage = new TabPage("采集结果预览");
+            samplePage.Controls.Add(_mappingSampleGrid);
+            recordsPage.Controls.Add(_mappingRecordsGrid);
+            sampleTabs.TabPages.Add(samplePage);
+            sampleTabs.TabPages.Add(recordsPage);
             var mappingGroup = new GroupBox
             {
                 Dock = DockStyle.Fill,
@@ -299,13 +331,29 @@ namespace MachineDataAcquisitionSystem.Forms
             };
             dataGridView1.Dock = DockStyle.Fill;
             mappingGroup.Controls.Add(dataGridView1);
-            _mappingCenterSplit.Panel1.Controls.Add(sampleGroup);
+            _mappingCenterSplit.Panel1.Controls.Add(sampleTabs);
             _mappingCenterSplit.Panel2.Controls.Add(mappingGroup);
 
-            middleParent.Controls.Add(_mappingCenterSplit);
-            middleParent.Controls.SetChildIndex(_mappingCenterSplit, 0);
-            panel2.BringToFront();
-            panel3.BringToFront();
+            middleParent.Controls.Remove(panel2);
+            middleParent.Controls.Remove(panel3);
+            var editorLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Margin = new Padding(0),
+                Padding = new Padding(0)
+            };
+            editorLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            editorLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, panel2.Height));
+            editorLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            editorLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, panel3.Height));
+            panel2.Dock = DockStyle.Fill;
+            panel3.Dock = DockStyle.Fill;
+            editorLayout.Controls.Add(panel2, 0, 0);
+            editorLayout.Controls.Add(_mappingCenterSplit, 0, 1);
+            editorLayout.Controls.Add(panel3, 0, 2);
+            middleParent.Controls.Add(editorLayout);
         }
 
         private void BuildMappingFooter()
@@ -369,6 +417,21 @@ namespace MachineDataAcquisitionSystem.Forms
                 ReadOnly = true
             });
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingDescriptionColumn, "说明", 150, true));
+            var scope = new DataGridViewComboBoxColumn
+            {
+                Name = MappingScopeColumn,
+                HeaderText = "来源范围",
+                Width = 85,
+                FlatStyle = FlatStyle.Flat
+            };
+            scope.Items.AddRange("公共字段", "明细列");
+            dataGridView1.Columns.Add(scope);
+            dataGridView1.Columns.Add(new DataGridViewCheckBoxColumn
+            {
+                Name = MappingKeyColumn,
+                HeaderText = "关键列",
+                Width = 60
+            });
 
             var locatorType = new DataGridViewComboBoxColumn
             {
@@ -377,7 +440,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 Width = 115,
                 FlatStyle = FlatStyle.Flat
             };
-            locatorType.Items.AddRange("cell", "labelOffset", "rowKey", "headerColumn");
+            locatorType.Items.AddRange("cell", "labelOffset", "rowKey", "headerColumn", "rowColumn");
             dataGridView1.Columns.Add(locatorType);
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingLocatorValueColumn, "单元格 / 标签", 135, false));
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingRowOffsetColumn, "行偏移", 65, false));
@@ -426,9 +489,12 @@ namespace MachineDataAcquisitionSystem.Forms
             listBoxMappingScripts.SelectedIndexChanged += MappingDefinitionList_SelectedIndexChanged;
             _mappingModelCombo.SelectedIndexChanged += MappingModelCombo_SelectedIndexChanged;
             _mappingSheetCombo.SelectedIndexChanged += MappingSheetCombo_SelectedIndexChanged;
+            _mappingModeCombo.SelectedIndexChanged += MappingModeCombo_SelectedIndexChanged;
             _mappingRuleNameTextBox.TextChanged += MappingRuleName_TextChanged;
             _mappingBrowseButton.Click += MappingBrowseButton_Click;
             _mappingPickLocatorButton.Click += MappingPickLocatorButton_Click;
+            _mappingFrameTableButton.Click += MappingFrameTableButton_Click;
+            _mappingRecordsGrid.CellDoubleClick += MappingRecordsGrid_CellDoubleClick;
             _mappingLocalAssistButton.Click += MappingLocalAssistButton_Click;
             _mappingAiAssistButton.Click += MappingAiAssistButton_Click;
             _mappingSaveButton.Click += MappingSaveButton_Click;
@@ -911,10 +977,12 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingCurrentVersion = null;
             _mappingCurrentDefinition = null;
             _mappingTemplateSignature = null;
+            _mappingRepeatedRows = null;
             _mappingSnapshot = null;
             _mappingSamplePathTextBox.Clear();
             _mappingSheetCombo.Items.Clear();
             _mappingExtensionLabel.Text = "扩展名：-";
+            SelectMappingMode(MappingRecordMode.SingleRecord);
             LoadMappingMachineCheckboxes();
             _mappingModelCombo.Enabled = true;
             if (_mappingModelCombo.Items.Count > 0 && _mappingModelCombo.SelectedIndex < 0)
@@ -978,6 +1046,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingCurrentVersion = version;
                 _mappingCurrentDefinition = definition;
                 _mappingTemplateSignature = definition.TemplateSignature;
+                _mappingRepeatedRows = definition.RepeatedRows;
+                SelectMappingMode(definition.RecordMode);
 
                 SelectMappingModel(definition.ModelId);
                 _mappingModelCombo.Enabled = false;
@@ -1069,6 +1139,13 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             row.Cells[MappingTargetTypeColumn].Value = field.FieldType;
             row.Cells[MappingRequiredColumn].Value = field.IsRequired;
             row.Cells[MappingDescriptionColumn].Value = field.Description ?? string.Empty;
+            MappingFieldScope fieldScope = rule == null ? MappingFieldScope.Common : rule.Scope;
+            row.Cells[MappingScopeColumn].Value = fieldScope == MappingFieldScope.RowColumn
+                ? "明细列"
+                : "公共字段";
+            row.Cells[MappingKeyColumn].Value = fieldScope == MappingFieldScope.RowColumn &&
+                _mappingRepeatedRows != null && rule != null && rule.Locator != null &&
+                rule.Locator.ColumnOffset == _mappingRepeatedRows.KeyColumnOffset;
             row.Cells[MappingLocatorTypeColumn].Value = rule == null || rule.Locator == null
                 ? "labelOffset"
                 : rule.Locator.Type;
@@ -1132,6 +1209,38 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             MarkMappingDirty();
         }
 
+        private void MappingModeCombo_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_mappingSuppressEvents) return;
+            CancelMappingPointSelection(false);
+            if (GetSelectedMappingMode() == MappingRecordMode.SingleRecord)
+                SetMappingStatus("单条记录模式：逐个配置公共字段定位。", Color.DimGray);
+            else
+                SetMappingStatus("重复行模式：在上方样本网格框选一行表头和首条数据，再点击“框选表格”。", Color.RoyalBlue);
+            MarkMappingDirty();
+        }
+
+        private MappingRecordMode GetSelectedMappingMode()
+        {
+            var choice = _mappingModeCombo == null ? null : _mappingModeCombo.SelectedItem as MappingModeChoice;
+            return choice == null ? MappingRecordMode.SingleRecord : choice.Mode;
+        }
+
+        private void SelectMappingMode(MappingRecordMode mode)
+        {
+            if (_mappingModeCombo == null) return;
+            for (int index = 0; index < _mappingModeCombo.Items.Count; index++)
+            {
+                var choice = _mappingModeCombo.Items[index] as MappingModeChoice;
+                if (choice != null && choice.Mode == mode)
+                {
+                    _mappingModeCombo.SelectedIndex = index;
+                    return;
+                }
+            }
+            _mappingModeCombo.SelectedIndex = 0;
+        }
+
         private void MappingSheetCombo_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_mappingSuppressEvents) return;
@@ -1175,6 +1284,12 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 MessageBox.Show("请先在字段映射网格中选中目标字段。", "点选定位", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
+            if (GetMappingFieldScope(dataGridView1.CurrentRow) == MappingFieldScope.RowColumn)
+            {
+                MessageBox.Show("明细列请在 Excel 样本网格中框选表头和首条数据后，点击“框选表格”统一配置。",
+                    "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
 
             string locatorType = CellText(dataGridView1.CurrentRow, MappingLocatorTypeColumn);
             if (!MappingRuleSerializer.AllowedLocatorTypes.Contains(locatorType))
@@ -1185,6 +1300,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
             _mappingPickTargetRowIndex = dataGridView1.CurrentRow.Index;
             _mappingPickAnchorSampleRowIndex = -1;
+            _mappingPickAnchorSampleColumnIndex = -1;
             _mappingPickAnchorCell = null;
             _mappingPickLocatorButton.Text = "取消点选";
             _mappingSampleGrid.Focus();
@@ -1201,9 +1317,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             MappingSheetSnapshot sheet = GetSelectedMappingSheet();
             if (sheet == null) return;
 
-            string coordinate = Convert.ToString(
-                _mappingSampleGrid.Rows[e.RowIndex].Cells["SampleCoordinate"].Value,
-                CultureInfo.InvariantCulture);
+            if (e.ColumnIndex < 0) return;
+            string coordinate = ToMappingColumnLetters(e.ColumnIndex) +
+                (e.RowIndex + 1).ToString(CultureInfo.InvariantCulture);
             MappingCellSnapshot selectedCell = sheet.Cells.FirstOrDefault(
                 cell => string.Equals(cell.Coordinate, coordinate, StringComparison.Ordinal));
             if (selectedCell == null) return;
@@ -1212,7 +1328,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             {
                 _mappingPickAnchorCell = selectedCell;
                 _mappingPickAnchorSampleRowIndex = e.RowIndex;
-                _mappingSampleGrid.Rows[e.RowIndex].DefaultCellStyle.BackColor = Color.LightGoldenrodYellow;
+                _mappingPickAnchorSampleColumnIndex = e.ColumnIndex;
+                _mappingSampleGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Style.BackColor = Color.LightGoldenrodYellow;
                 SetMappingStatus(
                     "点选定位 2/2：锚点 " + selectedCell.Coordinate + "，现在点击实际值单元格",
                     Color.RoyalBlue);
@@ -1257,6 +1374,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingApplyingSuggestion = true;
             try
             {
+                row.Cells[MappingScopeColumn].Value = "公共字段";
+                row.Cells[MappingKeyColumn].Value = false;
                 row.Cells[MappingRowOffsetColumn].Value = "0";
                 row.Cells[MappingColumnOffsetColumn].Value = "0";
                 row.Cells[MappingValueColumnColumn].Value = string.Empty;
@@ -1318,14 +1437,17 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         private void CancelMappingPointSelection(bool updateStatus)
         {
             if (_mappingPickAnchorSampleRowIndex >= 0 &&
-                _mappingPickAnchorSampleRowIndex < _mappingSampleGrid.Rows.Count)
+                _mappingPickAnchorSampleRowIndex < _mappingSampleGrid.Rows.Count &&
+                _mappingPickAnchorSampleColumnIndex >= 0 &&
+                _mappingPickAnchorSampleColumnIndex < _mappingSampleGrid.Columns.Count)
             {
                 _mappingSampleGrid.Rows[_mappingPickAnchorSampleRowIndex]
-                    .DefaultCellStyle.BackColor = Color.Empty;
+                    .Cells[_mappingPickAnchorSampleColumnIndex].Style.BackColor = Color.Empty;
             }
             bool wasActive = _mappingPickTargetRowIndex >= 0;
             _mappingPickTargetRowIndex = -1;
             _mappingPickAnchorSampleRowIndex = -1;
+            _mappingPickAnchorSampleColumnIndex = -1;
             _mappingPickAnchorCell = null;
             if (_mappingPickLocatorButton != null)
                 _mappingPickLocatorButton.Text = "点选定位";
@@ -1396,7 +1518,44 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingApplyingSuggestion = true;
             try
             {
-                if (columnName == MappingHumanConfirmedColumn)
+                if (columnName == MappingScopeColumn)
+                {
+                    if (GetMappingFieldScope(row) == MappingFieldScope.RowColumn)
+                    {
+                        row.Cells[MappingLocatorTypeColumn].Value = "rowColumn";
+                    }
+                    else if (string.Equals(CellText(row, MappingLocatorTypeColumn), "rowColumn", StringComparison.Ordinal))
+                    {
+                        row.Cells[MappingLocatorTypeColumn].Value = "labelOffset";
+                        row.Cells[MappingLocatorValueColumn].Value = string.Empty;
+                        row.Cells[MappingKeyColumn].Value = false;
+                    }
+                    metadata.ConfirmationState = MappingConfirmationState.HumanConfirmed;
+                    row.Cells[MappingHumanConfirmedColumn].Value = true;
+                }
+                else if (columnName == MappingKeyColumn)
+                {
+                    bool selected = Convert.ToBoolean(row.Cells[MappingKeyColumn].Value ?? false);
+                    if (selected)
+                    {
+                        if (GetMappingFieldScope(row) != MappingFieldScope.RowColumn)
+                        {
+                            row.Cells[MappingKeyColumn].Value = false;
+                            SetMappingStatus("只有明细列可以设为关键列。", Color.Firebrick);
+                        }
+                        else
+                        {
+                            foreach (DataGridViewRow other in dataGridView1.Rows)
+                            {
+                                if (!ReferenceEquals(other, row)) other.Cells[MappingKeyColumn].Value = false;
+                            }
+                            if (_mappingRepeatedRows != null)
+                                _mappingRepeatedRows.KeyColumnOffset = ParseMappingInteger(
+                                    row, MappingColumnOffsetColumn, "列偏移");
+                        }
+                    }
+                }
+                else if (columnName == MappingHumanConfirmedColumn)
                 {
                     bool confirmed = Convert.ToBoolean(row.Cells[MappingHumanConfirmedColumn].Value ?? false);
                     metadata.ConfirmationState = confirmed
@@ -1421,6 +1580,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         private static bool IsMappingEditableColumn(string columnName)
         {
             return columnName == MappingLocatorTypeColumn ||
+                   columnName == MappingScopeColumn ||
+                   columnName == MappingKeyColumn ||
                    columnName == MappingLocatorValueColumn ||
                    columnName == MappingRowOffsetColumn ||
                    columnName == MappingColumnOffsetColumn ||
@@ -1529,30 +1690,382 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         private void PopulateMappingSampleGrid()
         {
             _mappingSampleGrid.Rows.Clear();
+            _mappingSampleGrid.Columns.Clear();
+            _mappingRecordsGrid.Rows.Clear();
+            _mappingRecordsGrid.Columns.Clear();
             MappingSheetSnapshot sheet = GetSelectedMappingSheet();
-            if (sheet == null) return;
+            if (sheet == null || sheet.Cells.Count == 0) return;
 
             _mappingSampleGrid.SuspendLayout();
             try
             {
+                int maxRow = 0;
+                int maxColumn = 0;
                 foreach (MappingCellSnapshot cell in sheet.Cells)
                 {
-                    int rowIndex = _mappingSampleGrid.Rows.Add(
+                    int rowIndex;
+                    int columnIndex;
+                    if (!TryParseMappingCoordinate(cell.Coordinate, out rowIndex, out columnIndex)) continue;
+                    maxRow = Math.Max(maxRow, rowIndex);
+                    maxColumn = Math.Max(maxColumn, columnIndex);
+                }
+                for (int columnIndex = 0; columnIndex <= maxColumn; columnIndex++)
+                {
+                    _mappingSampleGrid.Columns.Add(new DataGridViewTextBoxColumn
+                    {
+                        Name = "ExcelColumn" + columnIndex.ToString(CultureInfo.InvariantCulture),
+                        HeaderText = ToMappingColumnLetters(columnIndex),
+                        Width = 105,
+                        SortMode = DataGridViewColumnSortMode.NotSortable
+                    });
+                }
+                _mappingSampleGrid.Rows.Add(maxRow + 1);
+                for (int rowIndex = 0; rowIndex <= maxRow; rowIndex++)
+                    _mappingSampleGrid.Rows[rowIndex].HeaderCell.Value =
+                        (rowIndex + 1).ToString(CultureInfo.InvariantCulture);
+
+                foreach (MappingCellSnapshot cell in sheet.Cells)
+                {
+                    int rowIndex;
+                    int columnIndex;
+                    if (!TryParseMappingCoordinate(cell.Coordinate, out rowIndex, out columnIndex)) continue;
+                    DataGridViewCell gridCell = _mappingSampleGrid.Rows[rowIndex].Cells[columnIndex];
+                    gridCell.Value = cell.DisplayText;
+                    gridCell.Tag = cell;
+                    gridCell.ToolTipText = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{0} / {1}{2}",
                         cell.Coordinate,
-                        cell.DisplayText,
                         cell.ValueType,
-                        cell.IsFormula);
+                        cell.IsFormula ? " / 公式" : string.Empty);
                     if (cell.FormulaCacheMissing)
                     {
-                        _mappingSampleGrid.Rows[rowIndex].Cells["SampleValue"].Style.ForeColor = Color.Firebrick;
-                        _mappingSampleGrid.Rows[rowIndex].Cells["SampleValue"].ToolTipText = "公式缓存值缺失";
+                        gridCell.Style.ForeColor = Color.Firebrick;
+                        gridCell.ToolTipText += " / 公式缓存值缺失";
                     }
                 }
+                ApplyMappingMergedRegionDisplay(sheet);
             }
             finally
             {
                 _mappingSampleGrid.ResumeLayout();
             }
+        }
+
+        private void ApplyMappingMergedRegionDisplay(MappingSheetSnapshot sheet)
+        {
+            foreach (string mergedRegion in sheet.MergedRegions ?? new List<string>())
+            {
+                string[] bounds = (mergedRegion ?? string.Empty).Split(':');
+                int firstRow;
+                int firstColumn;
+                int lastRow;
+                int lastColumn;
+                if (bounds.Length != 2 ||
+                    !TryParseMappingCoordinate(bounds[0], out firstRow, out firstColumn) ||
+                    !TryParseMappingCoordinate(bounds[1], out lastRow, out lastColumn))
+                    continue;
+
+                firstRow = Math.Max(0, firstRow);
+                firstColumn = Math.Max(0, firstColumn);
+                lastRow = Math.Min(lastRow, _mappingSampleGrid.Rows.Count - 1);
+                lastColumn = Math.Min(lastColumn, _mappingSampleGrid.Columns.Count - 1);
+                for (int rowIndex = firstRow; rowIndex <= lastRow; rowIndex++)
+                {
+                    for (int columnIndex = firstColumn; columnIndex <= lastColumn; columnIndex++)
+                    {
+                        DataGridViewCell cell = _mappingSampleGrid.Rows[rowIndex].Cells[columnIndex];
+                        cell.Style.BackColor = Color.AliceBlue;
+                        string note = "合并区域 " + mergedRegion;
+                        cell.ToolTipText = string.IsNullOrWhiteSpace(cell.ToolTipText)
+                            ? note
+                            : cell.ToolTipText + " / " + note;
+                    }
+                }
+            }
+        }
+
+        private void MappingFrameTableButton_Click(object sender, EventArgs e)
+        {
+            if (_mappingSnapshot == null || GetSelectedMappingSheet() == null)
+            {
+                MessageBox.Show("请先选择 Excel 样本和工作表。", "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (_mappingSampleGrid.SelectedCells.Count == 0)
+            {
+                MessageBox.Show("请在 Excel 样本网格中框选一行表头和紧邻的一条样例数据。",
+                    "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            List<int> rows = _mappingSampleGrid.SelectedCells.Cast<DataGridViewCell>()
+                .Select(cell => cell.RowIndex).Distinct().OrderBy(value => value).ToList();
+            List<int> columns = _mappingSampleGrid.SelectedCells.Cast<DataGridViewCell>()
+                .Select(cell => cell.ColumnIndex).Distinct().OrderBy(value => value).ToList();
+            if (rows.Count != 2 || rows[1] != rows[0] + 1 || columns.Count == 0 ||
+                _mappingSampleGrid.SelectedCells.Count != rows.Count * columns.Count)
+            {
+                MessageBox.Show("框选区域必须是连续两行：第一行为表头，第二行为第一条数据。",
+                    "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                ConfigureRepeatedRowsFromSelection(rows[0], rows[1], columns);
+            }
+            catch (Exception ex)
+            {
+                ShowMappingError("配置重复行表格失败", ex);
+            }
+        }
+
+        private void ConfigureRepeatedRowsFromSelection(int headerRow, int dataRow, IList<int> columns)
+        {
+            List<DataGridViewRow> targetRows = dataGridView1.Rows.Cast<DataGridViewRow>()
+                .Where(row =>
+                {
+                    var metadata = row.Tag as MappingRowMetadata;
+                    return metadata == null || !metadata.IsOrphan;
+                }).ToList();
+            var targetNames = targetRows.Select(row => CellText(row, MappingTargetFieldColumn)).ToList();
+            var descriptions = targetRows.ToDictionary(
+                row => CellText(row, MappingTargetFieldColumn),
+                row => CellText(row, MappingDescriptionColumn),
+                StringComparer.Ordinal);
+
+            using (var dialog = new Form
+            {
+                Text = "重复行列映射",
+                StartPosition = FormStartPosition.CenterParent,
+                Width = 900,
+                Height = 520,
+                MinimizeBox = false,
+                MaximizeBox = true,
+                ShowInTaskbar = false
+            })
+            {
+                var grid = new DataGridView
+                {
+                    Dock = DockStyle.Fill,
+                    AllowUserToAddRows = false,
+                    AllowUserToDeleteRows = false,
+                    RowHeadersVisible = false,
+                    AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                    EditMode = DataGridViewEditMode.EditOnEnter
+                };
+                grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "SourceColumn", HeaderText = "源列", ReadOnly = true, FillWeight = 45F });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Header", HeaderText = "表头", ReadOnly = true, FillWeight = 110F });
+                grid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Example", HeaderText = "样例值", ReadOnly = true, FillWeight = 130F });
+                var targetColumn = new DataGridViewComboBoxColumn
+                {
+                    Name = "TargetField",
+                    HeaderText = "映射到目标字段",
+                    FlatStyle = FlatStyle.Flat,
+                    FillWeight = 135F
+                };
+                targetColumn.Items.Add("（忽略）");
+                foreach (string targetName in targetNames) targetColumn.Items.Add(targetName);
+                grid.Columns.Add(targetColumn);
+                grid.Columns.Add(new DataGridViewTextBoxColumn
+                {
+                    Name = "Transforms",
+                    HeaderText = "转换（可选）",
+                    FillWeight = 105F
+                });
+                grid.Columns.Add(new DataGridViewCheckBoxColumn
+                {
+                    Name = "IsKey",
+                    HeaderText = "关键列",
+                    FillWeight = 55F
+                });
+
+                foreach (int columnIndex in columns)
+                {
+                    string header = Convert.ToString(
+                        _mappingSampleGrid.Rows[headerRow].Cells[columnIndex].Value,
+                        CultureInfo.InvariantCulture) ?? string.Empty;
+                    string example = Convert.ToString(
+                        _mappingSampleGrid.Rows[dataRow].Cells[columnIndex].Value,
+                        CultureInfo.InvariantCulture) ?? string.Empty;
+                    string suggested = targetNames.FirstOrDefault(target =>
+                        string.Equals(NormalizeMappingLabel(target), NormalizeMappingLabel(header), StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(NormalizeMappingLabel(descriptions[target]), NormalizeMappingLabel(header), StringComparison.OrdinalIgnoreCase));
+                    int index = grid.Rows.Add(
+                        ToMappingColumnLetters(columnIndex),
+                        header,
+                        example,
+                        suggested ?? "（忽略）",
+                        string.Empty,
+                        false);
+                    grid.Rows[index].Tag = columnIndex;
+                }
+
+                var footer = new FlowLayoutPanel
+                {
+                    Dock = DockStyle.Bottom,
+                    Height = 58,
+                    FlowDirection = FlowDirection.RightToLeft,
+                    Padding = new Padding(8)
+                };
+                var ok = new Button { Text = "应用映射", Width = 110, Height = 34 };
+                var cancel = new Button { Text = "取消", Width = 90, Height = 34 };
+                footer.Controls.Add(ok);
+                footer.Controls.Add(cancel);
+                footer.Controls.Add(new Label
+                {
+                    AutoSize = true,
+                    Margin = new Padding(0, 9, 16, 0),
+                    Text = "未选择的源列会忽略；必须且只能选择一个关键列。"
+                });
+                dialog.Controls.Add(grid);
+                dialog.Controls.Add(footer);
+                dialog.AcceptButton = ok;
+                dialog.CancelButton = cancel;
+                cancel.Click += delegate { dialog.DialogResult = DialogResult.Cancel; };
+                ok.Click += delegate
+                {
+                    try
+                    {
+                        List<DataGridViewRow> mapped = grid.Rows.Cast<DataGridViewRow>()
+                            .Where(row => !string.Equals(
+                                Convert.ToString(row.Cells["TargetField"].Value, CultureInfo.InvariantCulture),
+                                "（忽略）",
+                                StringComparison.Ordinal)).ToList();
+                        if (mapped.Count == 0)
+                            throw new MappingValidationException("请至少映射一个明细列。");
+                        List<string> mappedTargets = mapped.Select(row => Convert.ToString(
+                            row.Cells["TargetField"].Value, CultureInfo.InvariantCulture)).ToList();
+                        if (mappedTargets.Distinct(StringComparer.Ordinal).Count() != mappedTargets.Count)
+                            throw new MappingValidationException("同一目标字段不能映射到多个源列。");
+                        List<DataGridViewRow> keys = mapped.Where(row => Convert.ToBoolean(
+                            row.Cells["IsKey"].Value ?? false)).ToList();
+                        if (keys.Count != 1)
+                            throw new MappingValidationException("必须且只能选择一个已映射列作为关键列。");
+
+                        ApplyRepeatedRowColumnMappings(headerRow, dataRow, columns, mapped, keys[0]);
+                        dialog.DialogResult = DialogResult.OK;
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(dialog, ex.Message, "列映射无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    }
+                };
+                dialog.ShowDialog(this);
+            }
+        }
+
+        private void ApplyRepeatedRowColumnMappings(
+            int headerRow,
+            int dataRow,
+            IList<int> selectedColumns,
+            IList<DataGridViewRow> mappedRows,
+            DataGridViewRow keyRow)
+        {
+            MappingSheetSnapshot sheet = GetSelectedMappingSheet();
+            int anchorColumn = selectedColumns.First();
+            MappingTableAnchorMode anchorMode = MappingTableAnchorMode.FixedCell;
+            string anchorText = string.Empty;
+            foreach (int candidate in selectedColumns)
+            {
+                string header = Convert.ToString(
+                    _mappingSampleGrid.Rows[headerRow].Cells[candidate].Value,
+                    CultureInfo.InvariantCulture) ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(header)) continue;
+                int matches = sheet.Cells.Count(cell => string.Equals(
+                    NormalizeMappingLabel(cell.DisplayText),
+                    NormalizeMappingLabel(header),
+                    StringComparison.OrdinalIgnoreCase));
+                if (matches == 1)
+                {
+                    anchorColumn = candidate;
+                    anchorMode = MappingTableAnchorMode.HeaderText;
+                    anchorText = header;
+                    break;
+                }
+            }
+
+            int keyColumn = Convert.ToInt32(keyRow.Tag, CultureInfo.InvariantCulture);
+            _mappingRepeatedRows = new RepeatedRowDefinition
+            {
+                AnchorMode = anchorMode,
+                AnchorText = anchorText,
+                AnchorCell = ToMappingColumnLetters(anchorColumn) +
+                    (headerRow + 1).ToString(CultureInfo.InvariantCulture),
+                FirstDataRowOffset = dataRow - headerRow,
+                KeyColumnOffset = keyColumn - anchorColumn,
+                FirstColumnOffset = selectedColumns.First() - anchorColumn,
+                LastColumnOffset = selectedColumns.Last() - anchorColumn,
+                StopOnBlankKey = true
+            };
+
+            _mappingApplyingSuggestion = true;
+            try
+            {
+                SelectMappingMode(MappingRecordMode.RepeatingRows);
+                foreach (DataGridViewRow targetRow in dataGridView1.Rows)
+                {
+                    if (GetMappingFieldScope(targetRow) != MappingFieldScope.RowColumn) continue;
+                    targetRow.Cells[MappingScopeColumn].Value = "公共字段";
+                    targetRow.Cells[MappingKeyColumn].Value = false;
+                    targetRow.Cells[MappingLocatorTypeColumn].Value = "labelOffset";
+                    targetRow.Cells[MappingLocatorValueColumn].Value = string.Empty;
+                    targetRow.Cells[MappingHumanConfirmedColumn].Value = false;
+                    var metadata = targetRow.Tag as MappingRowMetadata;
+                    if (metadata != null) metadata.ConfirmationState = MappingConfirmationState.Unconfirmed;
+                    UpdateMappingConfirmationCell(targetRow);
+                }
+
+                var targetByName = dataGridView1.Rows.Cast<DataGridViewRow>().ToDictionary(
+                    row => CellText(row, MappingTargetFieldColumn), StringComparer.Ordinal);
+                foreach (DataGridViewRow sourceRow in mappedRows)
+                {
+                    string targetName = Convert.ToString(sourceRow.Cells["TargetField"].Value, CultureInfo.InvariantCulture);
+                    DataGridViewRow targetRow = targetByName[targetName];
+                    int sourceColumn = Convert.ToInt32(sourceRow.Tag, CultureInfo.InvariantCulture);
+                    targetRow.Cells[MappingScopeColumn].Value = "明细列";
+                    targetRow.Cells[MappingKeyColumn].Value = ReferenceEquals(sourceRow, keyRow);
+                    targetRow.Cells[MappingLocatorTypeColumn].Value = "rowColumn";
+                    targetRow.Cells[MappingLocatorValueColumn].Value = Convert.ToString(
+                        sourceRow.Cells["Header"].Value, CultureInfo.InvariantCulture) ?? string.Empty;
+                    targetRow.Cells[MappingRowOffsetColumn].Value = "0";
+                    targetRow.Cells[MappingColumnOffsetColumn].Value =
+                        (sourceColumn - anchorColumn).ToString(CultureInfo.InvariantCulture);
+                    targetRow.Cells[MappingValueColumnColumn].Value = string.Empty;
+                    targetRow.Cells[MappingDataRowOffsetColumn].Value = "0";
+                    targetRow.Cells[MappingTransformsColumn].Value = Convert.ToString(
+                        sourceRow.Cells["Transforms"].Value, CultureInfo.InvariantCulture) ?? string.Empty;
+                    targetRow.Cells[MappingHumanConfirmedColumn].Value = true;
+                    var metadata = targetRow.Tag as MappingRowMetadata ?? new MappingRowMetadata();
+                    targetRow.Tag = metadata;
+                    metadata.AnchorCell = null;
+                    metadata.AnchorText = null;
+                    metadata.ConfirmationState = MappingConfirmationState.HumanConfirmed;
+                    UpdateMappingConfirmationCell(targetRow);
+                    ClearMappingPreviewRow(targetRow);
+                }
+            }
+            finally
+            {
+                _mappingApplyingSuggestion = false;
+            }
+            MarkMappingDirty();
+            SetMappingStatus(
+                string.Format(CultureInfo.InvariantCulture,
+                    anchorMode == MappingTableAnchorMode.HeaderText
+                        ? "已配置重复行表格：{0} 个明细列，关键列 {1}，使用唯一表头锚点。"
+                        : "已配置重复行表格：{0} 个明细列，关键列 {1}，未找到唯一表头，已改用固定单元格锚点（稳定性较低）。",
+                    mappedRows.Count,
+                    ToMappingColumnLetters(keyColumn)),
+                anchorMode == MappingTableAnchorMode.HeaderText ? Color.DarkGreen : Color.DarkOrange);
+        }
+
+        private static string NormalizeMappingLabel(string value)
+        {
+            return string.Concat((value ?? string.Empty)
+                .Normalize(NormalizationForm.FormKC)
+                .Where(character => !char.IsWhiteSpace(character)));
         }
 
         private MappingSheetSnapshot GetSelectedMappingSheet()
@@ -1777,6 +2290,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     var metadata = row.Tag as MappingRowMetadata;
                     return metadata != null &&
                            !metadata.IsOrphan &&
+                           GetMappingFieldScope(row) == MappingFieldScope.Common &&
                            metadata.ConfirmationState == MappingConfirmationState.Unconfirmed &&
                            !HasMappingLocator(row);
                 })
@@ -1820,6 +2334,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         continue;
 
                     MappingRuleSerializer.ValidateLocator(suggestion.Locator);
+                    row.Cells[MappingScopeColumn].Value = "公共字段";
+                    row.Cells[MappingKeyColumn].Value = false;
                     row.Cells[MappingLocatorTypeColumn].Value = suggestion.Locator.Type;
                     row.Cells[MappingLocatorValueColumn].Value = suggestion.Locator.Type == "cell"
                         ? suggestion.Locator.Cell
@@ -2057,8 +2573,14 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 ModelSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(model.Id)),
                 NormalizedExtension = extension,
                 SheetName = sheetName,
-                TemplateSignature = _mappingTemplateSignature
+                TemplateSignature = _mappingTemplateSignature,
+                RecordMode = GetSelectedMappingMode(),
+                RepeatedRows = GetSelectedMappingMode() == MappingRecordMode.RepeatingRows
+                    ? _mappingRepeatedRows
+                    : null
             };
+            if (definition.RecordMode == MappingRecordMode.RepeatingRows && definition.RepeatedRows == null)
+                throw new MappingValidationException("请先在 Excel 样本网格框选表头和首条数据，并配置重复行列映射。");
 
             foreach (DataGridViewRow row in dataGridView1.Rows)
             {
@@ -2091,6 +2613,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         private FieldMappingRule CreateMappingFieldRule(DataGridViewRow row)
         {
             FieldMappingRule field = CreateFieldRuleMetadata(row);
+            field.Scope = GetMappingFieldScope(row);
             string locatorType = CellText(row, MappingLocatorTypeColumn);
             string locatorValue = CellText(row, MappingLocatorValueColumn);
             var locator = new MappingLocator
@@ -2197,9 +2720,19 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             return Convert.ToString(row.Cells[columnName].Value, CultureInfo.InvariantCulture) ?? string.Empty;
         }
 
+        private static MappingFieldScope GetMappingFieldScope(DataGridViewRow row)
+        {
+            return string.Equals(CellText(row, MappingScopeColumn), "明细列", StringComparison.Ordinal)
+                ? MappingFieldScope.RowColumn
+                : MappingFieldScope.Common;
+        }
+
         private static bool HasMappingLocator(DataGridViewRow row)
         {
-            return !string.IsNullOrWhiteSpace(CellText(row, MappingLocatorTypeColumn)) &&
+            string locatorType = CellText(row, MappingLocatorTypeColumn);
+            if (string.Equals(locatorType, "rowColumn", StringComparison.Ordinal))
+                return GetMappingFieldScope(row) == MappingFieldScope.RowColumn;
+            return !string.IsNullOrWhiteSpace(locatorType) &&
                    !string.IsNullOrWhiteSpace(CellText(row, MappingLocatorValueColumn));
         }
 
@@ -2218,12 +2751,15 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void DisplayMappingPreview(MappingPreviewResult preview)
         {
+            PopulateMappingRecordsGrid(preview);
             foreach (DataGridViewRow row in dataGridView1.Rows)
             {
                 ClearMappingPreviewRow(row);
                 string target = CellText(row, MappingTargetFieldColumn);
                 MappingPreviewFieldResult field;
-                if (preview.Fields.TryGetValue(target, out field))
+                if (!preview.Fields.TryGetValue(target, out field) && preview.Records.Count > 0)
+                    preview.Records[0].Fields.TryGetValue(target, out field);
+                if (field != null)
                 {
                     row.Cells[MappingPreviewCellColumn].Value = field.SourceCell ?? string.Empty;
                     row.Cells[MappingPreviewValueColumn].Value = Convert.ToString(
@@ -2252,14 +2788,82 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             }
         }
 
+        private void PopulateMappingRecordsGrid(MappingPreviewResult preview)
+        {
+            _mappingRecordsGrid.Rows.Clear();
+            _mappingRecordsGrid.Columns.Clear();
+            if (preview == null || preview.Records.Count == 0) return;
+
+            _mappingRecordsGrid.Columns.Add("PreviewExcelRow", "Excel 行");
+            List<string> targets = preview.Records.SelectMany(record => record.Fields.Keys)
+                .Distinct(StringComparer.Ordinal).ToList();
+            foreach (string target in targets)
+                _mappingRecordsGrid.Columns.Add("Preview_" + target, target);
+
+            foreach (MappingPreviewRecordResult record in preview.Records)
+            {
+                object[] values = new object[targets.Count + 1];
+                values[0] = record.ExcelRowNumber;
+                for (int index = 0; index < targets.Count; index++)
+                {
+                    MappingPreviewFieldResult field;
+                    if (record.Fields.TryGetValue(targets[index], out field))
+                        values[index + 1] = field.ErrorCode ?? Convert.ToString(field.Value, CultureInfo.InvariantCulture);
+                }
+                int rowIndex = _mappingRecordsGrid.Rows.Add(values);
+                for (int index = 0; index < targets.Count; index++)
+                {
+                    MappingPreviewFieldResult field;
+                    if (!record.Fields.TryGetValue(targets[index], out field)) continue;
+                    DataGridViewCell cell = _mappingRecordsGrid.Rows[rowIndex].Cells[index + 1];
+                    cell.Tag = field;
+                    cell.ToolTipText = string.Join(" / ", new[]
+                    {
+                        field.SourceCell ?? string.Empty,
+                        Convert.ToString(field.RawValue, CultureInfo.InvariantCulture) ?? string.Empty,
+                        field.ErrorCode ?? field.WarningCode ?? "通过"
+                    });
+                    if (!string.IsNullOrWhiteSpace(field.ErrorCode))
+                        cell.Style.BackColor = Color.MistyRose;
+                    else if (!string.IsNullOrWhiteSpace(field.WarningCode))
+                        cell.Style.BackColor = Color.LemonChiffon;
+                }
+            }
+        }
+
+        private void MappingRecordsGrid_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex <= 0) return;
+            var field = _mappingRecordsGrid.Rows[e.RowIndex].Cells[e.ColumnIndex].Tag as MappingPreviewFieldResult;
+            if (field == null || string.IsNullOrWhiteSpace(field.SourceCell)) return;
+
+            int rowIndex;
+            int columnIndex;
+            if (!TryParseMappingCoordinate(field.SourceCell, out rowIndex, out columnIndex) ||
+                rowIndex < 0 || rowIndex >= _mappingSampleGrid.Rows.Count ||
+                columnIndex < 0 || columnIndex >= _mappingSampleGrid.Columns.Count)
+                return;
+
+            var samplePage = _mappingSampleGrid.Parent as TabPage;
+            var sampleTabs = samplePage == null ? null : samplePage.Parent as TabControl;
+            if (sampleTabs != null) sampleTabs.SelectedTab = samplePage;
+            _mappingSampleGrid.ClearSelection();
+            _mappingSampleGrid.CurrentCell = _mappingSampleGrid.Rows[rowIndex].Cells[columnIndex];
+            _mappingSampleGrid.CurrentCell.Selected = true;
+            if (rowIndex >= 0) _mappingSampleGrid.FirstDisplayedScrollingRowIndex = rowIndex;
+            if (columnIndex >= 0) _mappingSampleGrid.FirstDisplayedScrollingColumnIndex = columnIndex;
+            _mappingSampleGrid.Focus();
+        }
+
         private static string BuildMappingValidationSummary(MappingPreviewResult preview)
         {
             return string.Format(
                 CultureInfo.InvariantCulture,
-                "sample={0};template={1};fields={2};warnings={3}",
+                "sample={0};template={1};fields={2};records={3};warnings={4}",
                 preview.SampleSha256,
                 preview.TemplateSignature,
                 preview.Fields.Count,
+                preview.Records.Count,
                 string.Join(",", preview.WarningCodes));
         }
 
@@ -2589,13 +3193,17 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingModelCombo.Enabled = ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
             _mappingRuleNameTextBox.Enabled = ready && !_mappingAiBusy;
             _mappingSheetCombo.Enabled = ready && !_mappingAiBusy && hasSample;
+            _mappingModeCombo.Enabled = ready && !_mappingAiBusy;
+            _mappingFrameTableButton.Enabled = ready && hasSample && !_mappingAiBusy &&
+                GetSelectedMappingMode() == MappingRecordMode.RepeatingRows;
             dataGridView1.Enabled = ready && !_mappingAiBusy;
             btnNewMappingScript.Enabled = ready && !_mappingAiBusy;
             listBoxMappingScripts.Enabled = ready && !_mappingAiBusy;
             _mappingLocalAssistButton.Enabled = ready && hasSample && !_mappingAiBusy &&
                 GetMappingSuggestionEligibleRows().Count > 0;
             _mappingPickLocatorButton.Enabled = ready && hasSample && !_mappingAiBusy &&
-                dataGridView1.CurrentRow != null;
+                dataGridView1.CurrentRow != null &&
+                GetMappingFieldScope(dataGridView1.CurrentRow) == MappingFieldScope.Common;
             _mappingAiAssistButton.Enabled = ready && hasSample && !_mappingAiBusy &&
                 _mappingAiOptions != null && GetMappingSuggestionEligibleRows().Count > 0;
             _mappingAiAssistButton.Text = _mappingAiOptions == null ? "AI 未配置" : "AI 自动填映射";
@@ -2618,6 +3226,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             panel3.Enabled = enabled;
             dataGridView1.Enabled = enabled;
             _mappingSampleGrid.Enabled = enabled;
+            _mappingRecordsGrid.Enabled = enabled;
         }
 
         private void ShowMappingError(string title, Exception exception)
@@ -2635,6 +3244,19 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             if (string.IsNullOrWhiteSpace(value)) return "-";
             return value.Length <= 12 ? value : value.Substring(0, 12);
+        }
+
+        private sealed class MappingModeChoice
+        {
+            public MappingModeChoice(MappingRecordMode mode, string text)
+            {
+                Mode = mode;
+                Text = text;
+            }
+
+            public MappingRecordMode Mode { get; private set; }
+            public string Text { get; private set; }
+            public override string ToString() { return Text; }
         }
 
         private sealed class MappingModelChoice
