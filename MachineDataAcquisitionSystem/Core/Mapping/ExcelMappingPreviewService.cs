@@ -55,8 +55,13 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
                     ISheet sheet = lease.Workbook.GetSheet(rule.SheetName);
                     var displayCells = sheetSnapshot.Cells.ToDictionary(cell => cell.Coordinate, StringComparer.Ordinal);
-                    foreach (FieldMappingRule field in rule.Fields)
-                        ResolveField(sheet, displayCells, field, result);
+                    if (rule.RecordMode == MappingRecordMode.RepeatingRows)
+                        ResolveRepeatingRows(sheet, sheetSnapshot, displayCells, rule, result);
+                    else
+                    {
+                        foreach (FieldMappingRule field in rule.Fields)
+                            ResolveField(sheet, displayCells, field, result);
+                    }
 
                     result.TemplateSignature = BuildTemplateSignature(rule, sheetSnapshot);
                     if (!string.IsNullOrWhiteSpace(rule.TemplateSignature) &&
@@ -305,6 +310,244 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             }
         }
 
+        private static void ResolveRepeatingRows(
+            ISheet sheet,
+            MappingSheetSnapshot sheetSnapshot,
+            IDictionary<string, MappingCellSnapshot> displayCells,
+            MappingRuleDefinition rule,
+            MappingPreviewResult result)
+        {
+            int anchorRow;
+            int anchorColumn;
+            string anchorError;
+            if (!TryResolveTableAnchor(sheetSnapshot, rule.RepeatedRows, out anchorRow, out anchorColumn, out anchorError))
+            {
+                AddError(result, anchorError);
+                return;
+            }
+
+            List<FieldMappingRule> commonFields = rule.Fields
+                .Where(field => field.Scope == MappingFieldScope.Common)
+                .ToList();
+            foreach (FieldMappingRule field in commonFields)
+                ResolveField(sheet, displayCells, field, result);
+
+            List<FieldMappingRule> rowFields = rule.Fields
+                .Where(field => field.Scope == MappingFieldScope.RowColumn)
+                .ToList();
+            foreach (FieldMappingRule field in rowFields)
+            {
+                if (string.IsNullOrWhiteSpace(field.Locator.Text)) continue;
+                int headerColumn = anchorColumn + field.Locator.ColumnOffset;
+                if (headerColumn < 0 || headerColumn >= MaximumColumns)
+                {
+                    AddError(result, "TABLE_REGION_OUT_OF_RANGE");
+                    continue;
+                }
+                MappingCellSnapshot actualHeader;
+                displayCells.TryGetValue(ToCoordinate(anchorRow, headerColumn), out actualHeader);
+                if (actualHeader == null || !string.Equals(
+                        NormalizeText(actualHeader.DisplayText),
+                        NormalizeText(field.Locator.Text),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    AddError(result, "TABLE_HEADER_MISMATCH");
+                }
+            }
+
+            int firstDataRow = anchorRow + rule.RepeatedRows.FirstDataRowOffset;
+            int keyColumn = anchorColumn + rule.RepeatedRows.KeyColumnOffset;
+            if (firstDataRow < 0 || firstDataRow >= MaximumRows ||
+                keyColumn < 0 || keyColumn >= MaximumColumns ||
+                anchorColumn + rule.RepeatedRows.FirstColumnOffset < 0 ||
+                anchorColumn + rule.RepeatedRows.LastColumnOffset >= MaximumColumns)
+            {
+                AddError(result, "TABLE_REGION_OUT_OF_RANGE");
+                return;
+            }
+
+            for (int rowIndex = firstDataRow; rowIndex < MaximumRows; rowIndex++)
+            {
+                IRow row = sheet.GetRow(rowIndex);
+                ICell keyCell = row == null
+                    ? null
+                    : row.GetCell(keyColumn, MissingCellPolicy.RETURN_BLANK_AS_NULL);
+                if (keyCell == null)
+                    break;
+                if (!IsFormulaCacheMissing(keyCell) && IsMissing(GetRawValue(keyCell)))
+                    break;
+
+                var record = new MappingPreviewRecordResult
+                {
+                    ExcelRowNumber = rowIndex + 1
+                };
+                foreach (FieldMappingRule common in commonFields)
+                {
+                    MappingPreviewFieldResult commonResult;
+                    if (result.Fields.TryGetValue(common.TargetField, out commonResult))
+                        record.Fields[common.TargetField] = CloneFieldResult(commonResult);
+                }
+                foreach (FieldMappingRule field in rowFields)
+                    ResolveRowField(sheet, rowIndex, anchorColumn, field, record, result);
+                record.IsValid = record.Fields.Values.All(field => string.IsNullOrWhiteSpace(field.ErrorCode));
+                result.Records.Add(record);
+            }
+
+            if (result.Records.Count == 0)
+                AddError(result, "NO_RECORDS");
+        }
+
+        private static bool TryResolveTableAnchor(
+            MappingSheetSnapshot sheet,
+            RepeatedRowDefinition definition,
+            out int rowIndex,
+            out int columnIndex,
+            out string error)
+        {
+            rowIndex = -1;
+            columnIndex = -1;
+            error = null;
+            if (definition.AnchorMode == MappingTableAnchorMode.FixedCell)
+            {
+                if (!TryParseCoordinate(definition.AnchorCell, out rowIndex, out columnIndex) ||
+                    rowIndex >= MaximumRows || columnIndex >= MaximumColumns)
+                {
+                    error = "TABLE_ANCHOR_OUT_OF_RANGE";
+                    return false;
+                }
+                if (!string.IsNullOrWhiteSpace(definition.AnchorText))
+                {
+                    string fixedCoordinate = ToCoordinate(rowIndex, columnIndex);
+                    MappingCellSnapshot actual = sheet.Cells.FirstOrDefault(cell =>
+                        string.Equals(cell.Coordinate, fixedCoordinate, StringComparison.Ordinal));
+                    if (actual == null || !string.Equals(
+                            NormalizeText(actual.DisplayText),
+                            NormalizeText(definition.AnchorText),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        error = "TABLE_ANCHOR_MISMATCH";
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            List<MappingCellSnapshot> matches = sheet.Cells.Where(cell => string.Equals(
+                NormalizeText(cell.DisplayText),
+                NormalizeText(definition.AnchorText),
+                StringComparison.OrdinalIgnoreCase)).ToList();
+            if (matches.Count == 0)
+            {
+                error = "TABLE_ANCHOR_NOT_FOUND";
+                return false;
+            }
+            if (matches.Count > 1)
+            {
+                error = "AMBIGUOUS_TABLE_ANCHOR";
+                return false;
+            }
+            if (!TryParseCoordinate(matches[0].Coordinate, out rowIndex, out columnIndex))
+            {
+                error = "INVALID_TABLE_ANCHOR";
+                return false;
+            }
+            return true;
+        }
+
+        private static void ResolveRowField(
+            ISheet sheet,
+            int rowIndex,
+            int anchorColumn,
+            FieldMappingRule field,
+            MappingPreviewRecordResult record,
+            MappingPreviewResult result)
+        {
+            int columnIndex = anchorColumn + field.Locator.ColumnOffset;
+            var fieldResult = new MappingPreviewFieldResult
+            {
+                TargetField = field.TargetField,
+                SourceCell = columnIndex >= 0 && columnIndex < MaximumColumns
+                    ? ToCoordinate(rowIndex, columnIndex)
+                    : string.Empty
+            };
+            record.Fields[field.TargetField] = fieldResult;
+            if (columnIndex < 0 || columnIndex >= MaximumColumns)
+            {
+                fieldResult.ErrorCode = "LOCATOR_OUT_OF_RANGE";
+                AddError(result, fieldResult.ErrorCode);
+                return;
+            }
+
+            IRow row = sheet.GetRow(rowIndex);
+            ICell cell = row == null ? null : row.GetCell(columnIndex, MissingCellPolicy.RETURN_BLANK_AS_NULL);
+            if (cell == null)
+            {
+                CompleteMissingRowField(field, fieldResult, result);
+                return;
+            }
+            if (IsFormulaCacheMissing(cell))
+            {
+                fieldResult.ErrorCode = "FORMULA_CACHE_MISSING";
+                AddError(result, fieldResult.ErrorCode);
+                return;
+            }
+
+            fieldResult.RawValue = GetRawValue(cell);
+            try
+            {
+                object value = ApplyTransforms(fieldResult.RawValue, field);
+                if (IsMissing(value) && field.IsRequired)
+                {
+                    fieldResult.ErrorCode = "MISSING_REQUIRED";
+                    AddError(result, fieldResult.ErrorCode);
+                    return;
+                }
+                fieldResult.Value = ConvertToTargetType(value, field.TargetType);
+            }
+            catch (FormatException)
+            {
+                fieldResult.ErrorCode = "CONVERSION_FAILED";
+                AddError(result, fieldResult.ErrorCode);
+            }
+            catch (OverflowException)
+            {
+                fieldResult.ErrorCode = "CONVERSION_FAILED";
+                AddError(result, fieldResult.ErrorCode);
+            }
+            catch (InvalidCastException)
+            {
+                fieldResult.ErrorCode = "CONVERSION_FAILED";
+                AddError(result, fieldResult.ErrorCode);
+            }
+        }
+
+        private static void CompleteMissingRowField(
+            FieldMappingRule field,
+            MappingPreviewFieldResult fieldResult,
+            MappingPreviewResult result)
+        {
+            if (field.IsRequired)
+            {
+                fieldResult.ErrorCode = "MISSING_REQUIRED";
+                AddError(result, fieldResult.ErrorCode);
+                return;
+            }
+            CompleteOptionalMissingField(field, fieldResult, result);
+        }
+
+        private static MappingPreviewFieldResult CloneFieldResult(MappingPreviewFieldResult source)
+        {
+            return new MappingPreviewFieldResult
+            {
+                TargetField = source.TargetField,
+                SourceCell = source.SourceCell,
+                RawValue = source.RawValue,
+                Value = source.Value,
+                ErrorCode = source.ErrorCode,
+                WarningCode = source.WarningCode
+            };
+        }
+
         private static ICell ResolveCell(
             ISheet sheet,
             IDictionary<string, MappingCellSnapshot> displayCells,
@@ -509,11 +752,11 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 case "long":
                     return ToLong(value);
                 case "decimal":
-                    return value is decimal ? value : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+                    return ToDecimal(value);
                 case "float":
-                    return value is float ? value : Convert.ToSingle(value, CultureInfo.InvariantCulture);
+                    return value is float ? value : Convert.ToSingle(ToDecimal(value), CultureInfo.InvariantCulture);
                 case "double":
-                    return value is double ? value : Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                    return value is double ? value : Convert.ToDouble(ToDecimal(value), CultureInfo.InvariantCulture);
                 case "datetime":
                     return ToDate(value);
                 case "bool":
@@ -548,7 +791,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     throw new FormatException("整数值不能包含小数部分。");
                 return checked((int)number);
             }
-            return int.Parse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture);
+            return int.Parse(NormalizeNumericText(value), NumberStyles.Integer, CultureInfo.InvariantCulture);
         }
 
         private static long ToLong(object value)
@@ -576,14 +819,27 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     throw new FormatException("整数值不能包含小数部分。");
                 return checked((long)number);
             }
-            return long.Parse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Integer, CultureInfo.InvariantCulture);
+            return long.Parse(NormalizeNumericText(value), NumberStyles.Integer, CultureInfo.InvariantCulture);
         }
 
         private static decimal ToDecimal(object value)
         {
             if (value is decimal) return (decimal)value;
             if (value is double) return Convert.ToDecimal((double)value, CultureInfo.InvariantCulture);
-            return decimal.Parse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Number, CultureInfo.InvariantCulture);
+            return decimal.Parse(
+                NormalizeNumericText(value),
+                NumberStyles.Number | NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture);
+        }
+
+        private static string NormalizeNumericText(object value)
+        {
+            return (Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty)
+                .Normalize(NormalizationForm.FormKC)
+                .Trim()
+                .Replace('\u2212', '-')
+                .Replace('\u2013', '-')
+                .Replace('\u2014', '-');
         }
 
         private static DateTime ToDate(object value)
@@ -669,12 +925,57 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         private static string BuildTemplateSignature(MappingRuleDefinition rule, MappingSheetSnapshot sheet)
         {
             var parts = new List<string> { sheet.Name };
-            parts.AddRange(sheet.MergedRegions.OrderBy(region => region, StringComparer.Ordinal));
+            if (rule.RecordMode == MappingRecordMode.RepeatingRows)
+            {
+                RepeatedRowDefinition rows = rule.RepeatedRows;
+                parts.Add(string.Join("|", new[]
+                {
+                    "repeatingRows",
+                    rows.AnchorMode.ToString(),
+                    NormalizeText(rows.AnchorText),
+                    rows.AnchorMode == MappingTableAnchorMode.FixedCell
+                        ? (rows.AnchorCell ?? string.Empty).ToUpperInvariant()
+                        : string.Empty,
+                    rows.FirstDataRowOffset.ToString(CultureInfo.InvariantCulture),
+                    rows.KeyColumnOffset.ToString(CultureInfo.InvariantCulture),
+                    rows.FirstColumnOffset.ToString(CultureInfo.InvariantCulture),
+                    rows.LastColumnOffset.ToString(CultureInfo.InvariantCulture)
+                }));
+            }
+            else
+            {
+                parts.AddRange(sheet.MergedRegions.OrderBy(region => region, StringComparer.Ordinal));
+            }
             foreach (FieldMappingRule field in rule.Fields.OrderBy(item => item.TargetField, StringComparer.Ordinal))
             {
                 MappingLocator locator = field.Locator;
                 string anchors = string.Empty;
-                if (locator.Type == "cell")
+                if (locator.Type == "rowColumn")
+                {
+                    int anchorRow;
+                    int anchorColumn;
+                    string anchorError;
+                    MappingCellSnapshot actualHeader = null;
+                    if (TryResolveTableAnchor(
+                            sheet,
+                            rule.RepeatedRows,
+                            out anchorRow,
+                            out anchorColumn,
+                            out anchorError))
+                    {
+                        int headerColumn = anchorColumn + locator.ColumnOffset;
+                        if (headerColumn >= 0 && headerColumn < MaximumColumns)
+                        {
+                            string coordinate = ToCoordinate(anchorRow, headerColumn);
+                            actualHeader = sheet.Cells.FirstOrDefault(cell =>
+                                string.Equals(cell.Coordinate, coordinate, StringComparison.Ordinal));
+                        }
+                    }
+                    anchors = string.IsNullOrWhiteSpace(locator.Text)
+                        ? "unnamed"
+                        : NormalizeText(actualHeader == null ? string.Empty : actualHeader.DisplayText);
+                }
+                else if (locator.Type == "cell")
                 {
                     int anchorRow;
                     int anchorColumn;

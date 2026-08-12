@@ -93,7 +93,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
         private static bool IsValidLocator(MappingLocator locator)
         {
-            if (locator == null || !MappingRuleSerializer.AllowedLocatorTypes.Contains(locator.Type ?? string.Empty))
+            if (locator == null || !MappingRuleSerializer.AiAllowedLocatorTypes.Contains(locator.Type ?? string.Empty))
                 return false;
             try
             {

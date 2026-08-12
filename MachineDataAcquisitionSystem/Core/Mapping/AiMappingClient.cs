@@ -518,7 +518,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             {
                 SchemaVersion = "1",
                 ModelSchemaHash = rule.ModelSchemaHash,
-                AllowedLocators = MappingRuleSerializer.AllowedLocatorTypes.OrderBy(value => value, StringComparer.Ordinal).ToList(),
+                AllowedLocators = MappingRuleSerializer.AiAllowedLocatorTypes.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                 AllowedTransforms = MappingRuleSerializer.AllowedTransforms
                     .Where(value => value != "valueMap" && value != "default")
                     .OrderBy(value => value, StringComparer.Ordinal)

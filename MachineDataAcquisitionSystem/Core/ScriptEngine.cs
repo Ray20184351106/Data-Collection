@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.IO;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using Microsoft.CSharp;
 using NPOI.XSSF.UserModel;
@@ -311,7 +312,15 @@ namespace MachineDataAcquisitionSystem.Core
 
             public object Execute(string filePath, int machineId)
             {
-                return _method.Invoke(_instance, new object[] { filePath, machineId });
+                try
+                {
+                    return _method.Invoke(_instance, new object[] { filePath, machineId });
+                }
+                catch (TargetInvocationException ex) when (ex.InnerException != null)
+                {
+                    ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+                    throw;
+                }
             }
         }
 

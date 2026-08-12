@@ -35,6 +35,20 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
         }
 
         [Fact]
+        public void Validate_does_not_allow_ai_to_create_row_column_locators()
+        {
+            AiMappingValidationResult result = Validate(NewResponse(
+                new AiMappingSuggestion
+                {
+                    TargetField = "SerialNumber",
+                    Locator = new MappingLocator { Type = "rowColumn", ColumnOffset = 0 }
+                }));
+
+            Assert.False(result.IsValid);
+            Assert.Contains("INVALID_LOCATOR", result.ErrorCodes);
+        }
+
+        [Fact]
         public void Validate_rejects_script_code_even_when_the_suggestions_are_otherwise_valid()
         {
             AiMappingResponse response = NewResponse(new AiMappingSuggestion

@@ -30,6 +30,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         }, StringComparer.Ordinal);
 
         public static readonly ISet<string> AllowedLocatorTypes = new HashSet<string>(
+            new[] { "cell", "labelOffset", "rowKey", "headerColumn", "rowColumn" },
+            StringComparer.Ordinal);
+
+        public static readonly ISet<string> AiAllowedLocatorTypes = new HashSet<string>(
             new[] { "cell", "labelOffset", "rowKey", "headerColumn" },
             StringComparer.Ordinal);
 
@@ -122,6 +126,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 throw new MappingValidationException("工作表名称不能为空。");
             ValidateTextLength(rule.SheetName, 128, "工作表名称");
             ValidateTextLength(rule.TemplateSignature, 256, "模板签名");
+            if (!Enum.IsDefined(typeof(MappingRecordMode), rule.RecordMode))
+                throw new MappingValidationException("记录模式无效。");
+            ValidateRepeatedRows(rule);
             if (rule.Fields == null || rule.Fields.Count == 0)
                 throw new MappingValidationException("映射至少需要一个目标字段。");
             if (rule.Fields.Count > MaximumMappedFields)
@@ -137,9 +144,14 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     throw new MappingValidationException("目标字段不能重复：" + field.TargetField);
                 if (!AllowedTargetTypes.Contains((field.TargetType ?? string.Empty).Trim()))
                     throw new MappingValidationException("目标字段类型不受支持：" + field.TargetField);
+                if (!Enum.IsDefined(typeof(MappingFieldScope), field.Scope))
+                    throw new MappingValidationException("字段来源范围无效：" + field.TargetField);
                 ValidateTextLength(field.TargetDescription, MaximumRuleTextLength, "目标字段说明");
                 ValidateTextLength(field.DefaultValue, MaximumRuleTextLength, "默认值");
                 ValidateLocator(field.Locator);
+                bool isRowLocator = string.Equals(field.Locator.Type, "rowColumn", StringComparison.Ordinal);
+                if ((field.Scope == MappingFieldScope.RowColumn) != isRowLocator)
+                    throw new MappingValidationException("字段来源范围与定位方式不一致：" + field.TargetField);
                 var transforms = field.Transforms ?? new List<string>();
                 if (transforms.Count > AllowedTransforms.Count ||
                     transforms.Distinct(StringComparer.Ordinal).Count() != transforms.Count)
@@ -151,6 +163,63 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 }
                 ValidateTransformParameters(field);
             }
+
+            if (rule.RecordMode == MappingRecordMode.SingleRecord)
+            {
+                if (rule.Fields.Any(field => field.Scope != MappingFieldScope.Common))
+                    throw new MappingValidationException("单条记录模式不能包含重复行字段。");
+            }
+            else
+            {
+                List<FieldMappingRule> rowFields = rule.Fields
+                    .Where(field => field.Scope == MappingFieldScope.RowColumn)
+                    .ToList();
+                if (rowFields.Count == 0)
+                    throw new MappingValidationException("重复行模式至少需要一个明细列映射。");
+                if (rowFields.Any(field =>
+                    field.Locator.ColumnOffset < rule.RepeatedRows.FirstColumnOffset ||
+                    field.Locator.ColumnOffset > rule.RepeatedRows.LastColumnOffset))
+                    throw new MappingValidationException("明细列映射超出已配置的重复行列范围。");
+                if (!rowFields.Any(field => field.Locator != null &&
+                    field.Locator.ColumnOffset == rule.RepeatedRows.KeyColumnOffset))
+                    throw new MappingValidationException("重复行关键列必须映射到一个目标字段。");
+            }
+        }
+
+        private static void ValidateRepeatedRows(MappingRuleDefinition rule)
+        {
+            if (rule.RecordMode == MappingRecordMode.SingleRecord)
+            {
+                if (rule.RepeatedRows != null)
+                    throw new MappingValidationException("单条记录模式不能配置重复行区域。");
+                return;
+            }
+
+            RepeatedRowDefinition rows = rule.RepeatedRows;
+            if (rows == null)
+                throw new MappingValidationException("重复行模式缺少表格区域配置。");
+            if (!Enum.IsDefined(typeof(MappingTableAnchorMode), rows.AnchorMode))
+                throw new MappingValidationException("重复行表格锚点模式无效。");
+            ValidateTextLength(rows.AnchorText, MaximumRuleTextLength, "重复行锚点文本");
+            ValidateTextLength(rows.AnchorCell, 16, "重复行锚点坐标");
+            if (rows.AnchorMode == MappingTableAnchorMode.HeaderText &&
+                string.IsNullOrWhiteSpace(rows.AnchorText))
+                throw new MappingValidationException("表头文本锚点不能为空。");
+            if (rows.AnchorMode == MappingTableAnchorMode.FixedCell &&
+                !IsCoordinateToken(rows.AnchorCell))
+                throw new MappingValidationException("固定表格锚点坐标无效。");
+            if (rows.FirstDataRowOffset <= 0 || rows.FirstDataRowOffset > 2000)
+                throw new MappingValidationException("首条数据行偏移必须在 1 到 2000 之间。");
+            if (rows.KeyColumnOffset < -128 || rows.KeyColumnOffset > 128 ||
+                rows.FirstColumnOffset < -128 || rows.FirstColumnOffset > 128 ||
+                rows.LastColumnOffset < -128 || rows.LastColumnOffset > 128 ||
+                rows.FirstColumnOffset > rows.LastColumnOffset ||
+                rows.LastColumnOffset - rows.FirstColumnOffset + 1 > ExcelMappingPreviewService.MaximumColumns ||
+                rows.KeyColumnOffset < rows.FirstColumnOffset ||
+                rows.KeyColumnOffset > rows.LastColumnOffset)
+                throw new MappingValidationException("重复行列范围或关键列偏移无效。");
+            if (!rows.StopOnBlankKey)
+                throw new MappingValidationException("首版重复行仅支持关键列为空时结束。");
         }
 
         private static void ValidateTransformParameters(FieldMappingRule field)
@@ -198,6 +267,12 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     throw new MappingValidationException("固定单元格坐标无效。");
                 if (!IsCoordinateToken(locator.AnchorCell) || string.IsNullOrWhiteSpace(locator.AnchorText))
                     throw new MappingValidationException("固定单元格映射必须包含结构锚点坐标和文本。");
+            }
+            else if (string.Equals(locator.Type, "rowColumn", StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrEmpty(locator.Cell) || !string.IsNullOrEmpty(locator.AnchorCell) ||
+                    !string.IsNullOrEmpty(locator.AnchorText) || !string.IsNullOrEmpty(locator.ValueColumn))
+                    throw new MappingValidationException("重复行列定位只能包含列偏移和可选表头文本。");
             }
             else
             {

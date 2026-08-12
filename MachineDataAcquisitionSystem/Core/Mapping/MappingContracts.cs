@@ -18,7 +18,39 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public string NormalizedExtension { get; set; }
         public string SheetName { get; set; }
         public string TemplateSignature { get; set; }
+        public MappingRecordMode RecordMode { get; set; }
+        public RepeatedRowDefinition RepeatedRows { get; set; }
         public List<FieldMappingRule> Fields { get; set; }
+    }
+
+    public enum MappingRecordMode
+    {
+        SingleRecord = 0,
+        RepeatingRows = 1
+    }
+
+    public enum MappingFieldScope
+    {
+        Common = 0,
+        RowColumn = 1
+    }
+
+    public enum MappingTableAnchorMode
+    {
+        HeaderText = 0,
+        FixedCell = 1
+    }
+
+    public sealed class RepeatedRowDefinition
+    {
+        public MappingTableAnchorMode AnchorMode { get; set; }
+        public string AnchorText { get; set; }
+        public string AnchorCell { get; set; }
+        public int FirstDataRowOffset { get; set; }
+        public int KeyColumnOffset { get; set; }
+        public int FirstColumnOffset { get; set; }
+        public int LastColumnOffset { get; set; }
+        public bool StopOnBlankKey { get; set; }
     }
 
     public sealed class FieldMappingRule
@@ -33,6 +65,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public string TargetDescription { get; set; }
         public bool IsRequired { get; set; }
         public string DefaultValue { get; set; }
+        public MappingFieldScope Scope { get; set; }
         public MappingLocator Locator { get; set; }
         public List<string> Transforms { get; set; }
         public Dictionary<string, string> ExactValueMap { get; set; }
@@ -103,6 +136,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             ErrorCodes = new List<string>();
             WarningCodes = new List<string>();
             Fields = new Dictionary<string, MappingPreviewFieldResult>(StringComparer.Ordinal);
+            Records = new List<MappingPreviewRecordResult>();
         }
 
         public bool IsValid { get; set; }
@@ -110,6 +144,19 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public string TemplateSignature { get; set; }
         public List<string> ErrorCodes { get; set; }
         public List<string> WarningCodes { get; set; }
+        public Dictionary<string, MappingPreviewFieldResult> Fields { get; set; }
+        public List<MappingPreviewRecordResult> Records { get; set; }
+    }
+
+    public sealed class MappingPreviewRecordResult
+    {
+        public MappingPreviewRecordResult()
+        {
+            Fields = new Dictionary<string, MappingPreviewFieldResult>(StringComparer.Ordinal);
+        }
+
+        public int ExcelRowNumber { get; set; }
+        public bool IsValid { get; set; }
         public Dictionary<string, MappingPreviewFieldResult> Fields { get; set; }
     }
 

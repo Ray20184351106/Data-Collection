@@ -12,9 +12,11 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             string json = MappingRuleSerializer.Serialize(rule);
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
 
+            bool repeating = rule.RecordMode == MappingRecordMode.RepeatingRows;
+            string contractModel = repeating ? "__mappingContractModel" : "model";
             var lines = new List<string>
             {
-                "var model = new " + rule.TargetModelType + "();"
+                "var " + contractModel + " = new " + rule.TargetModelType + "();"
             };
             for (int index = 0; index < rule.Fields.Count; index++)
             {
@@ -23,13 +25,23 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 string csharpType = ToCSharpType(field.TargetType);
                 // These trusted, identifier-only assignments force the generated model
                 // source to expose a readable/writable property with the DB-declared type.
-                lines.Add(csharpType + " " + contractVariable + " = model." + field.TargetField + ";");
-                lines.Add("model." + field.TargetField + " = " + contractVariable + ";");
+                lines.Add(csharpType + " " + contractVariable + " = " + contractModel + "." + field.TargetField + ";");
+                lines.Add(contractModel + "." + field.TargetField + " = " + contractVariable + ";");
             }
-            lines.Add(
-                "MachineDataAcquisitionSystem.Core.Mapping.MappingRuntime.PopulateModel(" +
-                "model, \"" + encoded + "\", filePath, machineId);");
-            lines.Add("return model;");
+            if (repeating)
+            {
+                lines.Add(
+                    "var models = MachineDataAcquisitionSystem.Core.Mapping.MappingRuntime.CreateModels<" +
+                    rule.TargetModelType + ">(\"" + encoded + "\", filePath, machineId);");
+                lines.Add("return models;");
+            }
+            else
+            {
+                lines.Add(
+                    "MachineDataAcquisitionSystem.Core.Mapping.MappingRuntime.PopulateModel(" +
+                    "model, \"" + encoded + "\", filePath, machineId);");
+                lines.Add("return model;");
+            }
             return string.Join(Environment.NewLine, lines);
         }
 
