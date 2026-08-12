@@ -792,7 +792,7 @@ namespace MachineDataAcquisitionSystem
             int recordCount = 0;
             string errorMsg = null;
             long? parserVersionId = null;
-            BatchItem batchItem = null;
+            IReadOnlyList<BatchItem> batchItems = Array.Empty<BatchItem>();
             SemaphoreSlim deviceProcessingLimit = null;
             bool deviceProcessingLimitAcquired = false;
             bool globalProcessingLimitAcquired = false;
@@ -866,19 +866,14 @@ namespace MachineDataAcquisitionSystem
                 UpdateQueueStatus(machineId, fileName, "处理中", 50);
 
                 // ========== 3. 执行脚本 ==========
-                object model = null;
+                IReadOnlyList<object> models = Array.Empty<object>();
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    model = ScriptEngine.Execute(script, filePath, machineId);
+                    object scriptResult = ScriptEngine.Execute(script, filePath, machineId);
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (model == null)
-                        throw new InvalidOperationException("解析规则返回了空结果。");
-                    if (!string.IsNullOrWhiteSpace(script.TargetModelType) &&
-                        !string.Equals(model.GetType().Name, script.TargetModelType, StringComparison.Ordinal) &&
-                        !string.Equals(model.GetType().FullName, script.TargetModelType, StringComparison.Ordinal))
-                        throw new InvalidOperationException("解析结果类型与规则关联模型不一致。");
-                    recordCount = 1;
+                    models = MappingResultNormalizer.Normalize(scriptResult, script.TargetModelType);
+                    recordCount = models.Count;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -908,7 +903,7 @@ namespace MachineDataAcquisitionSystem
                 UpdateQueueStatus(machineId, fileName, "处理中", 70);
 
                 // ========== 4. 保存到服务器数据库 ==========
-                if (model != null)
+                if (models.Count > 0)
                 {
                     try
                     {
@@ -916,10 +911,14 @@ namespace MachineDataAcquisitionSystem
 
                         // ========== 补全基类默认值 ==========
                         cancellationToken.ThrowIfCancellationRequested();
-                        await FillDefaultValues(model);
+                        foreach (object model in models)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            await FillDefaultValues(model);
+                        }
                         cancellationToken.ThrowIfCancellationRequested();
-                        batchItem = AddToBatch(machineId, script.ModelId, model, cancellationToken);
-                        AddLog($"[机台{machineId}] 数据已加入批量队列", LogLevel.Success);
+                        batchItems = AddBatchGroup(machineId, script.ModelId, models, cancellationToken);
+                        AddLog($"[机台{machineId}] {batchItems.Count} 条数据已作为同一文件批次加入队列", LogLevel.Success);
                         //if (!saveSuccess)
                         //{
                         //    AddLog($"[机台{machineId}] 保存到服务器数据库失败", LogLevel.Error);
@@ -942,12 +941,12 @@ namespace MachineDataAcquisitionSystem
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 90);
 
-                AddLog($"[机台{machineId}] 处理成功", LogLevel.Success);
+                AddLog($"[机台{machineId}] 处理成功，共解析 {recordCount} 条记录", LogLevel.Success);
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 95);
 
                 cancellationToken.ThrowIfCancellationRequested();
-                MarkBatchItemReady(batchItem, cancellationToken);
+                MarkBatchGroupReady(batchItems, cancellationToken);
                 try
                 {
                     if (_fileWatchers.ContainsKey(machineId))
@@ -957,7 +956,7 @@ namespace MachineDataAcquisitionSystem
                 }
                 catch
                 {
-                    RemoveBatchItem(batchItem);
+                    RemoveBatchGroup(batchItems);
                     throw;
                 }
 
@@ -973,7 +972,7 @@ namespace MachineDataAcquisitionSystem
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 isCancelled = true;
-                RemoveBatchItem(batchItem);
+                RemoveBatchGroup(batchItems);
                 AddLog($"[机台{machineId}] 采集已取消，文件保留在原目录: {fileName}", LogLevel.Warning);
                 UpdateQueueStatus(machineId, fileName, "已取消", 100);
             }
@@ -981,7 +980,7 @@ namespace MachineDataAcquisitionSystem
             {
                 if (!acquisitionCommitted)
                 {
-                    RemoveBatchItem(batchItem);
+                    RemoveBatchGroup(batchItems);
                 }
                 AddLog($"[机台{machineId}] 处理文件异常: {ex.Message}", LogLevel.Error);
                 UpdateQueueStatus(machineId, fileName, "失败", 100);
@@ -1896,6 +1895,7 @@ VALUES
         // ========== 批量插入相关 ==========
         private class BatchItem
         {
+            public Guid FileGroupId { get; set; }
             public int MachineId { get; set; }
             public int ModelId { get; set; }
             public object Model { get; set; }
@@ -1930,57 +1930,68 @@ VALUES
         /// <summary>
         /// 添加数据到批量队列
         /// </summary>
-        private BatchItem AddToBatch(
+        private IReadOnlyList<BatchItem> AddBatchGroup(
             int machineId,
             int modelId,
-            object model,
+            IReadOnlyList<object> models,
             CancellationToken cancellationToken)
         {
-            if (model == null) return null;
+            if (models == null || models.Count == 0)
+                throw new InvalidOperationException("同一文件批次不能为空。");
 
             lock (_batchLock)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var batchItem = new BatchItem
+                Guid fileGroupId = Guid.NewGuid();
+                var batchItems = models.Select(model => new BatchItem
                 {
+                    FileGroupId = fileGroupId,
                     MachineId = machineId,
                     ModelId = modelId,
-                    Model = model,
+                    Model = model ?? throw new InvalidOperationException("同一文件批次中包含空记录。"),
                     CancellationToken = cancellationToken,
                     IsReadyToPersist = false
-                };
-                _batchDataList.Add(batchItem);
-                AddLog($"加入批量队列，当前队列长度: {_batchDataList.Count}", LogLevel.Info);
+                }).ToList();
 
-                // 达到批量大小，立即刷新
-                if (_batchDataList.Count >= _batchSize)
-                {
-                    AddLog($"达到批量阈值 {_batchSize}，触发批量插入", LogLevel.Info);
-                    Task.Run(async () => await FlushBatchAsync());
-                }
-
-                return batchItem;
+                _batchDataList.AddRange(batchItems);
+                AddLog($"加入文件批次 {fileGroupId:N}，批次 {batchItems.Count} 条，当前队列长度: {_batchDataList.Count}", LogLevel.Info);
+                return batchItems;
             }
         }
 
-        private void MarkBatchItemReady(BatchItem batchItem, CancellationToken cancellationToken)
+        private void MarkBatchGroupReady(IReadOnlyList<BatchItem> batchItems, CancellationToken cancellationToken)
         {
-            if (batchItem == null) return;
+            if (batchItems == null || batchItems.Count == 0) return;
 
             lock (_batchLock)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                batchItem.IsReadyToPersist = true;
+                foreach (BatchItem batchItem in batchItems)
+                {
+                    if (!_batchDataList.Contains(batchItem))
+                        throw new InvalidOperationException("文件批次在标记可入库前已不完整。");
+                }
+
+                foreach (BatchItem batchItem in batchItems)
+                    batchItem.IsReadyToPersist = true;
+
+                int readyCount = _batchDataList.Count(item => item.IsReadyToPersist);
+                if (readyCount >= _batchSize)
+                {
+                    AddLog($"可入库数据达到批量阈值 {_batchSize}，触发批量插入", LogLevel.Info);
+                    Task.Run(async () => await FlushBatchAsync());
+                }
             }
         }
 
-        private void RemoveBatchItem(BatchItem batchItem)
+        private void RemoveBatchGroup(IReadOnlyList<BatchItem> batchItems)
         {
-            if (batchItem == null) return;
+            if (batchItems == null || batchItems.Count == 0) return;
 
             lock (_batchLock)
             {
-                _batchDataList.Remove(batchItem);
+                var itemSet = new HashSet<BatchItem>(batchItems);
+                _batchDataList.RemoveAll(itemSet.Contains);
             }
         }
 
