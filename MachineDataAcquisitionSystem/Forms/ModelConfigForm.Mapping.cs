@@ -46,6 +46,8 @@ namespace MachineDataAcquisitionSystem.Forms
         private bool _mappingSuppressEvents;
         private bool _mappingApplyingSuggestion;
         private bool _mappingDirty;
+        private string _mappingCleanEditorStateHash;
+        private string _mappingCleanTemplateSignature;
         private bool _mappingAiBusy;
         private int _mappingSelectedListIndex = -1;
 
@@ -992,7 +994,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingSuppressEvents = false;
 
             PopulateMappingRows(model == null ? 0 : model.Id, null);
-            _mappingDirty = false;
+            AcceptMappingEditorStateAsClean();
             ClearMappingPreviewColumns();
             SetMappingStatus("新映射：请选择只读 Excel 样本并配置字段定位", Color.DimGray);
             UpdateMappingCommandState();
@@ -1003,6 +1005,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             if (_mappingSuppressEvents || listBoxMappingScripts.SelectedIndex < 0) return;
 
             int requestedIndex = listBoxMappingScripts.SelectedIndex;
+            RefreshMappingDirtyStateFromEditor();
             if (_mappingDirty && requestedIndex != _mappingSelectedListIndex)
             {
                 DialogResult result = MessageBox.Show(
@@ -1027,6 +1030,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private bool ConfirmDiscardMappingChanges()
         {
+            RefreshMappingDirtyStateFromEditor();
             if (!_mappingDirty) return true;
             return MessageBox.Show(
                 "当前映射有未保存修改。是否放弃这些修改？",
@@ -1066,7 +1070,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 LoadMappingMachineCheckboxes(version.DefinitionId);
                 _mappingSuppressEvents = false;
 
-                _mappingDirty = false;
+                AcceptMappingEditorStateAsClean();
                 ClearMappingPreviewColumns();
                 UpdateMappingVersionStatus();
                 UpdateMappingCommandState();
@@ -1510,6 +1514,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             if (_mappingSuppressEvents || _mappingApplyingSuggestion || e.RowIndex < 0 || e.ColumnIndex < 0)
                 return;
+            if (!_mappingDirty && MappingEditorMatchesCleanState())
+                return;
 
             DataGridViewRow row = dataGridView1.Rows[e.RowIndex];
             var metadata = row.Tag as MappingRowMetadata ?? new MappingRowMetadata();
@@ -1594,10 +1600,108 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void MarkMappingDirty()
         {
+            if (MappingEditorMatchesCleanState())
+            {
+                _mappingDirty = false;
+                _mappingTemplateSignature = _mappingCleanTemplateSignature;
+                UpdateMappingVersionStatus();
+                UpdateMappingCommandState();
+                return;
+            }
             _mappingDirty = true;
             _mappingTemplateSignature = null;
             UpdateMappingVersionStatus();
             UpdateMappingCommandState();
+        }
+
+        private void AcceptMappingEditorStateAsClean()
+        {
+            _mappingDirty = false;
+            _mappingCleanTemplateSignature = _mappingTemplateSignature;
+            _mappingCleanEditorStateHash = CaptureMappingEditorStateHash();
+        }
+
+        private void RefreshMappingDirtyStateFromEditor()
+        {
+            if (!MappingEditorMatchesCleanState()) return;
+            _mappingDirty = false;
+            _mappingTemplateSignature = _mappingCleanTemplateSignature;
+        }
+
+        private bool MappingEditorMatchesCleanState()
+        {
+            return !string.IsNullOrEmpty(_mappingCleanEditorStateHash) &&
+                   string.Equals(
+                       _mappingCleanEditorStateHash,
+                       CaptureMappingEditorStateHash(),
+                       StringComparison.Ordinal);
+        }
+
+        private string CaptureMappingEditorStateHash()
+        {
+            var state = new StringBuilder();
+            MappingModelChoice model = GetSelectedMappingModel();
+            AppendMappingStatePart(state, model == null ? 0 : model.Id);
+            AppendMappingStatePart(state, _mappingRuleNameTextBox == null ? null : _mappingRuleNameTextBox.Text);
+            AppendMappingStatePart(state, _mappingSheetCombo == null ? null : _mappingSheetCombo.SelectedItem);
+            AppendMappingStatePart(state, (int)GetSelectedMappingMode());
+
+            RepeatedRowDefinition repeated = _mappingRepeatedRows;
+            AppendMappingStatePart(state, repeated == null ? null : (object)(int)repeated.AnchorMode);
+            AppendMappingStatePart(state, repeated == null ? null : repeated.AnchorText);
+            AppendMappingStatePart(state, repeated == null ? null : repeated.AnchorCell);
+            AppendMappingStatePart(state, repeated == null ? null : (object)repeated.FirstDataRowOffset);
+            AppendMappingStatePart(state, repeated == null ? null : (object)repeated.KeyColumnOffset);
+            AppendMappingStatePart(state, repeated == null ? null : (object)repeated.FirstColumnOffset);
+            AppendMappingStatePart(state, repeated == null ? null : (object)repeated.LastColumnOffset);
+            AppendMappingStatePart(state, repeated != null && repeated.StopOnBlankKey);
+
+            string[] columns =
+            {
+                MappingTargetFieldColumn,
+                MappingTargetTypeColumn,
+                MappingRequiredColumn,
+                MappingDescriptionColumn,
+                MappingScopeColumn,
+                MappingKeyColumn,
+                MappingLocatorTypeColumn,
+                MappingLocatorValueColumn,
+                MappingRowOffsetColumn,
+                MappingColumnOffsetColumn,
+                MappingValueColumnColumn,
+                MappingDataRowOffsetColumn,
+                MappingTransformsColumn,
+                MappingValueMapColumn,
+                MappingDefaultValueColumn,
+                MappingHumanConfirmedColumn
+            };
+            if (dataGridView1 != null)
+            {
+                foreach (DataGridViewRow row in dataGridView1.Rows)
+                {
+                    AppendMappingStatePart(state, row.IsNewRow);
+                    foreach (string column in columns)
+                        AppendMappingStatePart(state, row.Cells[column].Value);
+
+                    var metadata = row.Tag as MappingRowMetadata;
+                    AppendMappingStatePart(state, metadata == null ? null : (object)(int)metadata.ConfirmationState);
+                    AppendMappingStatePart(state, metadata == null ? null : metadata.AnchorCell);
+                    AppendMappingStatePart(state, metadata == null ? null : metadata.AnchorText);
+                    AppendMappingStatePart(state, metadata != null && metadata.IsOrphan);
+                }
+            }
+            return MappingRuleSerializer.Sha256(state.ToString());
+        }
+
+        private static void AppendMappingStatePart(StringBuilder state, object value)
+        {
+            string text = value == null
+                ? string.Empty
+                : Convert.ToString(value, CultureInfo.InvariantCulture);
+            state.Append(text.Length.ToString(CultureInfo.InvariantCulture));
+            state.Append(':');
+            state.Append(text);
+            state.Append('|');
         }
 
         private void MappingBrowseButton_Click(object sender, EventArgs e)
@@ -1665,25 +1769,32 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void LoadMappingSheetChoices(string preferredSheet)
         {
+            bool previouslySuppressingEvents = _mappingSuppressEvents;
             _mappingSuppressEvents = true;
-            _mappingSheetCombo.Items.Clear();
-            if (_mappingSnapshot != null)
+            try
             {
-                foreach (MappingSheetSnapshot sheet in _mappingSnapshot.Sheets)
-                    _mappingSheetCombo.Items.Add(sheet.Name);
-            }
-            else if (!string.IsNullOrWhiteSpace(preferredSheet))
-            {
-                _mappingSheetCombo.Items.Add(preferredSheet);
-            }
+                _mappingSheetCombo.Items.Clear();
+                if (_mappingSnapshot != null)
+                {
+                    foreach (MappingSheetSnapshot sheet in _mappingSnapshot.Sheets)
+                        _mappingSheetCombo.Items.Add(sheet.Name);
+                }
+                else if (!string.IsNullOrWhiteSpace(preferredSheet))
+                {
+                    _mappingSheetCombo.Items.Add(preferredSheet);
+                }
 
-            int selectedIndex = -1;
-            if (!string.IsNullOrWhiteSpace(preferredSheet))
-                selectedIndex = _mappingSheetCombo.FindStringExact(preferredSheet);
-            if (selectedIndex < 0 && _mappingSheetCombo.Items.Count > 0)
-                selectedIndex = 0;
-            _mappingSheetCombo.SelectedIndex = selectedIndex;
-            _mappingSuppressEvents = false;
+                int selectedIndex = -1;
+                if (!string.IsNullOrWhiteSpace(preferredSheet))
+                    selectedIndex = _mappingSheetCombo.FindStringExact(preferredSheet);
+                if (selectedIndex < 0 && _mappingSheetCombo.Items.Count > 0)
+                    selectedIndex = 0;
+                _mappingSheetCombo.SelectedIndex = selectedIndex;
+            }
+            finally
+            {
+                _mappingSuppressEvents = previouslySuppressingEvents;
+            }
             PopulateMappingSampleGrid();
         }
 
@@ -2494,7 +2605,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
                 _mappingCurrentVersion = current;
                 _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(current.DefinitionJson);
-                _mappingDirty = false;
+                AcceptMappingEditorStateAsClean();
                 RefreshMappingDefinitionList(current.DefinitionId);
                 LoadMappingMachineCheckboxes(current.DefinitionId);
                 SetMappingStatus(
@@ -2535,7 +2646,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingCurrentVersion = saved;
             _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(saved.DefinitionJson);
             _mappingTemplateSignature = _mappingCurrentDefinition.TemplateSignature;
-            _mappingDirty = false;
+            AcceptMappingEditorStateAsClean();
             _mappingModelCombo.Enabled = false;
             RefreshMappingDefinitionList(saved.DefinitionId);
             UpdateMappingVersionStatus();
@@ -3052,7 +3163,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingCurrentVersion = rollbackResult;
                 _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(rollbackResult.DefinitionJson);
                 _mappingTemplateSignature = _mappingCurrentDefinition.TemplateSignature;
-                _mappingDirty = false;
+                AcceptMappingEditorStateAsClean();
                 RefreshMappingDefinitionList(rollbackResult.DefinitionId);
                 LoadMappingVersion(rollbackResult);
                 SetMappingStatus(
