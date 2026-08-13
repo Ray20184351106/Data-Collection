@@ -10,6 +10,22 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         {
             MappingRuleSerializer.ValidateDefinition(rule);
             string json = MappingRuleSerializer.Serialize(rule);
+            return GenerateCore(rule, json);
+        }
+
+        internal string GenerateFromValidatedSerializedDefinition(
+            MappingRuleDefinition rule,
+            string serializedDefinition)
+        {
+            MappingRuleSerializer.ValidateDefinition(rule);
+            if (string.IsNullOrWhiteSpace(serializedDefinition))
+                throw new ArgumentException("Serialized mapping definition is required.", nameof(serializedDefinition));
+            MappingRuleSerializer.ValidateSerializedSize(serializedDefinition);
+            return GenerateCore(rule, serializedDefinition);
+        }
+
+        private static string GenerateCore(MappingRuleDefinition rule, string json)
+        {
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
 
             bool repeating = rule.RecordMode == MappingRecordMode.RepeatingRows;

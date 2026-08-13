@@ -58,6 +58,33 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             return json;
         }
 
+        internal static string SerializeLegacyDefaultEnumProjection(MappingRuleDefinition rule)
+        {
+            if (rule == null) throw new ArgumentNullException(nameof(rule));
+            JObject token = JObject.Parse(Serialize(rule));
+            if (rule.RecordMode == MappingRecordMode.SingleRecord)
+            {
+                token.Property(nameof(MappingRuleDefinition.RecordMode))?.Remove();
+                if (rule.RepeatedRows == null)
+                    token.Property(nameof(MappingRuleDefinition.RepeatedRows))?.Remove();
+            }
+
+            var fields = token[nameof(MappingRuleDefinition.Fields)] as JArray;
+            if (fields != null)
+            {
+                foreach (JObject field in fields.OfType<JObject>())
+                {
+                    JProperty scope = field.Property(nameof(FieldMappingRule.Scope));
+                    if (scope != null && scope.Value.Type == JTokenType.Integer && scope.Value.Value<int>() == 0)
+                        scope.Remove();
+                }
+            }
+
+            string json = SortToken(token).ToString(Formatting.None);
+            ValidateSerializedSize(json);
+            return json;
+        }
+
         public static MappingRuleDefinition Deserialize(string json)
         {
             if (string.IsNullOrWhiteSpace(json))

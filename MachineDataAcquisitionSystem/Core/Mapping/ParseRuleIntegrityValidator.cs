@@ -45,10 +45,15 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             }
 
             string canonicalJson = MappingRuleSerializer.Serialize(definition);
-            if (!string.Equals(canonicalJson, version.DefinitionJson, StringComparison.Ordinal))
+            bool isCanonical = string.Equals(canonicalJson, version.DefinitionJson, StringComparison.Ordinal);
+            bool isSupportedLegacyCanonical = !isCanonical && string.Equals(
+                MappingRuleSerializer.SerializeLegacyDefaultEnumProjection(definition),
+                version.DefinitionJson,
+                StringComparison.Ordinal);
+            if (!isCanonical && !isSupportedLegacyCanonical)
                 throw new ParseRuleStateException("The mapping definition JSON is not canonical or was modified.");
             if (!string.Equals(
-                    MappingRuleSerializer.Sha256(canonicalJson),
+                    MappingRuleSerializer.Sha256(version.DefinitionJson),
                     version.ContentSha256,
                     StringComparison.OrdinalIgnoreCase))
                 throw new ParseRuleStateException("The mapping definition content hash does not match.");
@@ -59,7 +64,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 !string.Equals(definition.NormalizedExtension, version.NormalizedExtension, StringComparison.Ordinal))
                 throw new ParseRuleStateException("The mapping definition identity does not match its version metadata.");
 
-            string expectedScript = new MappingScriptGenerator().Generate(definition);
+            var generator = new MappingScriptGenerator();
+            string expectedScript = isSupportedLegacyCanonical
+                ? generator.GenerateFromValidatedSerializedDefinition(definition, version.DefinitionJson)
+                : generator.Generate(definition);
             if (!string.Equals(expectedScript, version.DerivedScriptCode, StringComparison.Ordinal))
                 throw new ParseRuleStateException("The derived mapping script does not match the trusted generator output.");
         }
