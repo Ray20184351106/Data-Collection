@@ -26,12 +26,16 @@ namespace MachineDataAcquisitionSystem.Forms
         private int _currentScriptId = -1;
         private Button _btnDeleteModel;
         private Button _btnDeleteScript;
+        private ContextMenuStrip _modelContextMenu;
+        private ToolStripMenuItem _copyModelMenuItem;
+        private ToolStripMenuItem _deleteModelMenuItem;
 
         public ModelConfigForm()
         {
             InitializeComponent();
             InitializeMappingUi();
             InitializeDeletionButtons();
+            InitializeModelContextMenu();
 
             // 绑定事件
             this.Load += ModelConfigForm_Load;
@@ -44,6 +48,38 @@ namespace MachineDataAcquisitionSystem.Forms
             btnSaveScript.Click += BtnSaveScript_Click;
             listBoxScripts.SelectedIndexChanged += ListBoxScripts_SelectedIndexChanged;
             tabControl1.SelectedIndexChanged += tabControl1_SelectedIndexChanged;
+        }
+
+        private void InitializeModelContextMenu()
+        {
+            _modelContextMenu = new ContextMenuStrip(components);
+            _copyModelMenuItem = new ToolStripMenuItem("复制模型");
+            _deleteModelMenuItem = new ToolStripMenuItem("删除模型");
+            _copyModelMenuItem.Click += BtnCopyModel_Click;
+            _deleteModelMenuItem.Click += BtnDeleteModel_Click;
+            _modelContextMenu.Items.AddRange(new ToolStripItem[]
+            {
+                _copyModelMenuItem,
+                new ToolStripSeparator(),
+                _deleteModelMenuItem
+            });
+            _modelContextMenu.Opening += ModelContextMenu_Opening;
+            listBoxModels.MouseDown += ListBoxModels_MouseDown;
+            listBoxModels.ContextMenuStrip = _modelContextMenu;
+        }
+
+        private void ListBoxModels_MouseDown(object sender, MouseEventArgs e)
+        {
+            if (e.Button != MouseButtons.Right) return;
+            int index = listBoxModels.IndexFromPoint(e.Location);
+            if (index >= 0) listBoxModels.SelectedIndex = index;
+        }
+
+        private void ModelContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            bool hasSelection = _currentModelId > 0 && _currentModel != null;
+            _copyModelMenuItem.Enabled = hasSelection;
+            _deleteModelMenuItem.Enabled = hasSelection;
         }
 
         private void InitializeDeletionButtons()
@@ -99,6 +135,39 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 MessageBox.Show("删除模型失败：" + ex.Message, "删除模型", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void BtnCopyModel_Click(object sender, EventArgs e)
+        {
+            if (_currentModelId <= 0 || _currentModel == null)
+            {
+                MessageBox.Show("请先选择要复制的数据模型。", "复制模型", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            try
+            {
+                ModelCopyResult copy = new ModelCopyService(DatabaseHelper.GetDatabasePath())
+                    .CopyModel(_currentModelId);
+                LoadModels();
+                LoadParentModels();
+                SelectModel(copy.ModelId);
+                MessageBox.Show(
+                    "已复制为“" + copy.ModelName + "”。副本默认停用，未复制解析规则和机台绑定，请调整并验证后再启用。",
+                    "复制模型",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("复制模型失败：" + ex.Message, "复制模型", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void SelectModel(int modelId)
+        {
+            int index = _models.FindIndex(model => model.Id == modelId);
+            if (index >= 0) listBoxModels.SelectedIndex = index;
         }
 
         private void BtnDeleteScript_Click(object sender, EventArgs e)

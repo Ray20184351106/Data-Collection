@@ -194,6 +194,7 @@
     <Compile Include="Core\Mapping\MappingSavePolicy.cs" />
     <Compile Include="Core\Mapping\MappingRuntime.cs" />
     <Compile Include="Core\Mapping\MappingScriptGenerator.cs" />
+    <Compile Include="Core\Mapping\ModelCopyService.cs" />
     <Compile Include="Core\Mapping\ModelSchemaService.cs" />
     <Compile Include="Core\Mapping\ParseRuleStore.cs" />
     <Compile Include="Core\Mapping\ParseRuleDatabaseMigrator.cs" />
