@@ -39,6 +39,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 FieldMappingRule field = rule.Fields[index];
                 string contractVariable = "__mappingContract" + index;
                 string csharpType = ToCSharpType(field.TargetType);
+                if (!field.IsRequired && !string.Equals(csharpType, "string", StringComparison.Ordinal))
+                {
+                    csharpType += "?";
+                }
                 // These trusted, identifier-only assignments force the generated model
                 // source to expose a readable/writable property with the DB-declared type.
                 lines.Add(csharpType + " " + contractVariable + " = " + contractModel + "." + field.TargetField + ";");

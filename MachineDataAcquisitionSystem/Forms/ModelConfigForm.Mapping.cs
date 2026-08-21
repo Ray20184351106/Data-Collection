@@ -40,6 +40,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private const string MappingPreviewValueColumn = "MappingPreviewValue";
         private const string MappingPreviewConvertedValueColumn = "MappingPreviewConvertedValue";
         private const string MappingPreviewResultColumn = "MappingPreviewResult";
+        private const int MappingSampleAutoScrollEdge = 28;
 
         private bool _mappingUiInitialized;
         private bool _mappingDataLoaded;
@@ -70,6 +71,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private SplitContainer _mappingCenterSplit;
         private ToolTip _mappingToolTip;
         private ComboBox _mappingModeCombo;
+        private System.Windows.Forms.Timer _mappingSampleAutoScrollTimer;
 
         private ParseRuleStore _mappingRuleStore;
         private ExcelMappingPreviewService _mappingPreviewService;
@@ -86,6 +88,12 @@ namespace MachineDataAcquisitionSystem.Forms
         private int _mappingPickAnchorSampleColumnIndex = -1;
         private MappingCellSnapshot _mappingPickAnchorCell;
         private RepeatedRowDefinition _mappingRepeatedRows;
+        private int _mappingSampleDragAnchorRowIndex = -1;
+        private int _mappingSampleDragAnchorColumnIndex = -1;
+        private int _mappingSampleDragEndRowIndex = -1;
+        private int _mappingSampleDragEndColumnIndex = -1;
+        private Point _mappingSampleMouseDownPoint;
+        private bool _mappingSampleDragging;
 
         private void InitializeMappingUi()
         {
@@ -306,6 +314,10 @@ namespace MachineDataAcquisitionSystem.Forms
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells,
                 BackgroundColor = SystemColors.Window
             };
+            _mappingSampleAutoScrollTimer = new System.Windows.Forms.Timer(components)
+            {
+                Interval = 80
+            };
 
             _mappingCenterSplit = new SplitContainer
             {
@@ -506,6 +518,11 @@ namespace MachineDataAcquisitionSystem.Forms
             dataGridView1.CurrentCellDirtyStateChanged += MappingGrid_CurrentCellDirtyStateChanged;
             dataGridView1.DataError += MappingGrid_DataError;
             _mappingSampleGrid.CellClick += MappingSampleGrid_CellClick;
+            _mappingSampleGrid.CellMouseDown += MappingSampleGrid_CellMouseDown;
+            _mappingSampleGrid.MouseMove += MappingSampleGrid_MouseMove;
+            _mappingSampleGrid.MouseUp += MappingSampleGrid_MouseUp;
+            _mappingSampleGrid.MouseCaptureChanged += MappingSampleGrid_MouseCaptureChanged;
+            _mappingSampleAutoScrollTimer.Tick += MappingSampleAutoScrollTimer_Tick;
         }
 
         private void MappingUiForm_Load(object sender, EventArgs e)
@@ -526,6 +543,12 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 _mappingRuleStore.Dispose();
                 _mappingRuleStore = null;
+            }
+            if (_mappingSampleAutoScrollTimer != null)
+            {
+                _mappingSampleAutoScrollTimer.Stop();
+                _mappingSampleAutoScrollTimer.Dispose();
+                _mappingSampleAutoScrollTimer = null;
             }
         }
 
@@ -1315,6 +1338,243 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 Color.RoyalBlue);
         }
 
+        private void MappingSampleGrid_CellMouseDown(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            StopMappingSampleDrag(false);
+            if (e.Button != MouseButtons.Left || e.RowIndex < 0 || e.ColumnIndex < 0 ||
+                (ModifierKeys & (Keys.Control | Keys.Shift)) != Keys.None)
+                return;
+
+            _mappingSampleDragAnchorRowIndex = e.RowIndex;
+            _mappingSampleDragAnchorColumnIndex = e.ColumnIndex;
+            _mappingSampleDragEndRowIndex = e.RowIndex;
+            _mappingSampleDragEndColumnIndex = e.ColumnIndex;
+            Rectangle cellBounds = _mappingSampleGrid.GetCellDisplayRectangle(
+                e.ColumnIndex,
+                e.RowIndex,
+                false);
+            _mappingSampleMouseDownPoint = new Point(cellBounds.Left + e.X, cellBounds.Top + e.Y);
+        }
+
+        private void MappingSampleGrid_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_mappingSampleDragAnchorRowIndex < 0 || _mappingSampleDragAnchorColumnIndex < 0)
+                return;
+            if ((e.Button & MouseButtons.Left) == 0)
+            {
+                StopMappingSampleDrag();
+                return;
+            }
+
+            if (!_mappingSampleDragging)
+            {
+                Size dragSize = SystemInformation.DragSize;
+                var dragStartBounds = new Rectangle(
+                    _mappingSampleMouseDownPoint.X - dragSize.Width / 2,
+                    _mappingSampleMouseDownPoint.Y - dragSize.Height / 2,
+                    dragSize.Width,
+                    dragSize.Height);
+                if (dragStartBounds.Contains(e.Location)) return;
+
+                _mappingSampleDragging = true;
+                _mappingSampleGrid.Capture = true;
+                _mappingSampleAutoScrollTimer.Start();
+            }
+
+            ExtendMappingSampleSelection(e.Location, Point.Empty);
+        }
+
+        private void MappingSampleGrid_MouseUp(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+                StopMappingSampleDrag();
+        }
+
+        private void MappingSampleGrid_MouseCaptureChanged(object sender, EventArgs e)
+        {
+            if (_mappingSampleDragging &&
+                !_mappingSampleGrid.Capture &&
+                (Control.MouseButtons & MouseButtons.Left) == 0)
+                StopMappingSampleDrag();
+        }
+
+        private void MappingSampleAutoScrollTimer_Tick(object sender, EventArgs e)
+        {
+            if (!_mappingSampleDragging ||
+                _mappingSampleGrid == null ||
+                _mappingSampleGrid.IsDisposed ||
+                (Control.MouseButtons & MouseButtons.Left) == 0)
+            {
+                StopMappingSampleDrag();
+                return;
+            }
+
+            Point pointer = _mappingSampleGrid.PointToClient(Cursor.Position);
+            Rectangle viewport = GetMappingSampleViewport();
+            Point direction = GetMappingSampleAutoScrollDirection(
+                pointer,
+                viewport,
+                MappingSampleAutoScrollEdge);
+            if (direction == Point.Empty) return;
+
+            MoveMappingSampleViewport(direction);
+            ExtendMappingSampleSelection(pointer, direction);
+        }
+
+        private Rectangle GetMappingSampleViewport()
+        {
+            Rectangle client = _mappingSampleGrid.ClientRectangle;
+            int left = client.Left + (_mappingSampleGrid.RowHeadersVisible
+                ? _mappingSampleGrid.RowHeadersWidth
+                : 0);
+            int top = client.Top + (_mappingSampleGrid.ColumnHeadersVisible
+                ? _mappingSampleGrid.ColumnHeadersHeight
+                : 0);
+            int right = Math.Max(left + 1, client.Right - SystemInformation.VerticalScrollBarWidth);
+            int bottom = Math.Max(top + 1, client.Bottom - SystemInformation.HorizontalScrollBarHeight);
+            return Rectangle.FromLTRB(left, top, right, bottom);
+        }
+
+        private static Point GetMappingSampleAutoScrollDirection(
+            Point pointer,
+            Rectangle viewport,
+            int edgeSize)
+        {
+            if (viewport.Width <= 0 || viewport.Height <= 0 || edgeSize <= 0)
+                return Point.Empty;
+
+            int horizontal = 0;
+            if (pointer.X <= viewport.Left + edgeSize)
+                horizontal = -1;
+            else if (pointer.X >= viewport.Right - edgeSize)
+                horizontal = 1;
+
+            int vertical = 0;
+            if (pointer.Y <= viewport.Top + edgeSize)
+                vertical = -1;
+            else if (pointer.Y >= viewport.Bottom - edgeSize)
+                vertical = 1;
+
+            return new Point(horizontal, vertical);
+        }
+
+        private void MoveMappingSampleViewport(Point direction)
+        {
+            if (direction.X != 0 && _mappingSampleGrid.Columns.Count > 0)
+            {
+                int firstColumn = _mappingSampleGrid.FirstDisplayedScrollingColumnIndex;
+                int nextColumn = FindNextVisibleMappingSampleColumn(firstColumn, direction.X);
+                if (nextColumn >= 0)
+                    _mappingSampleGrid.FirstDisplayedScrollingColumnIndex = nextColumn;
+            }
+
+            if (direction.Y != 0 && _mappingSampleGrid.Rows.Count > 0)
+            {
+                int firstRow = _mappingSampleGrid.FirstDisplayedScrollingRowIndex;
+                int nextRow = FindNextVisibleMappingSampleRow(firstRow, direction.Y);
+                if (nextRow >= 0)
+                    _mappingSampleGrid.FirstDisplayedScrollingRowIndex = nextRow;
+            }
+        }
+
+        private int FindNextVisibleMappingSampleColumn(int currentIndex, int direction)
+        {
+            int index = currentIndex < 0
+                ? (direction > 0 ? -1 : _mappingSampleGrid.Columns.Count)
+                : currentIndex;
+            for (index += direction; index >= 0 && index < _mappingSampleGrid.Columns.Count; index += direction)
+            {
+                DataGridViewColumn column = _mappingSampleGrid.Columns[index];
+                if (column.Visible && !column.Frozen) return index;
+            }
+            return -1;
+        }
+
+        private int FindNextVisibleMappingSampleRow(int currentIndex, int direction)
+        {
+            int index = currentIndex < 0
+                ? (direction > 0 ? -1 : _mappingSampleGrid.Rows.Count)
+                : currentIndex;
+            for (index += direction; index >= 0 && index < _mappingSampleGrid.Rows.Count; index += direction)
+            {
+                if (_mappingSampleGrid.Rows[index].Visible) return index;
+            }
+            return -1;
+        }
+
+        private void ExtendMappingSampleSelection(Point pointer, Point direction)
+        {
+            if (_mappingSampleDragAnchorRowIndex < 0 || _mappingSampleDragAnchorColumnIndex < 0)
+                return;
+
+            Rectangle viewport = GetMappingSampleViewport();
+            int x = Math.Max(viewport.Left + 1, Math.Min(pointer.X, viewport.Right - 2));
+            int y = Math.Max(viewport.Top + 1, Math.Min(pointer.Y, viewport.Bottom - 2));
+            DataGridView.HitTestInfo hit = _mappingSampleGrid.HitTest(x, y);
+            if (hit.RowIndex >= 0 && hit.ColumnIndex >= 0)
+            {
+                _mappingSampleDragEndRowIndex = hit.RowIndex;
+                _mappingSampleDragEndColumnIndex = hit.ColumnIndex;
+            }
+            else
+            {
+                _mappingSampleDragEndRowIndex = Math.Max(
+                    0,
+                    Math.Min(
+                        _mappingSampleGrid.Rows.Count - 1,
+                        _mappingSampleDragEndRowIndex + direction.Y));
+                _mappingSampleDragEndColumnIndex = Math.Max(
+                    0,
+                    Math.Min(
+                        _mappingSampleGrid.Columns.Count - 1,
+                        _mappingSampleDragEndColumnIndex + direction.X));
+            }
+
+            SelectMappingSampleRange(
+                _mappingSampleDragAnchorRowIndex,
+                _mappingSampleDragAnchorColumnIndex,
+                _mappingSampleDragEndRowIndex,
+                _mappingSampleDragEndColumnIndex);
+        }
+
+        private void SelectMappingSampleRange(
+            int anchorRowIndex,
+            int anchorColumnIndex,
+            int endRowIndex,
+            int endColumnIndex)
+        {
+            int firstRow = Math.Min(anchorRowIndex, endRowIndex);
+            int lastRow = Math.Max(anchorRowIndex, endRowIndex);
+            int firstColumn = Math.Min(anchorColumnIndex, endColumnIndex);
+            int lastColumn = Math.Max(anchorColumnIndex, endColumnIndex);
+            if (firstRow < 0 || lastRow >= _mappingSampleGrid.Rows.Count ||
+                firstColumn < 0 || lastColumn >= _mappingSampleGrid.Columns.Count)
+                return;
+
+            _mappingSampleGrid.ClearSelection();
+            for (int rowIndex = firstRow; rowIndex <= lastRow; rowIndex++)
+            {
+                for (int columnIndex = firstColumn; columnIndex <= lastColumn; columnIndex++)
+                    _mappingSampleGrid.Rows[rowIndex].Cells[columnIndex].Selected = true;
+            }
+        }
+
+        private void StopMappingSampleDrag(bool releaseCapture = true)
+        {
+            if (_mappingSampleAutoScrollTimer != null)
+                _mappingSampleAutoScrollTimer.Stop();
+            _mappingSampleDragging = false;
+            _mappingSampleDragAnchorRowIndex = -1;
+            _mappingSampleDragAnchorColumnIndex = -1;
+            _mappingSampleDragEndRowIndex = -1;
+            _mappingSampleDragEndColumnIndex = -1;
+            if (releaseCapture &&
+                _mappingSampleGrid != null &&
+                !_mappingSampleGrid.IsDisposed &&
+                _mappingSampleGrid.Capture)
+                _mappingSampleGrid.Capture = false;
+        }
+
         private void MappingSampleGrid_CellClick(object sender, DataGridViewCellEventArgs e)
         {
             if (_mappingPickTargetRowIndex < 0 || e.RowIndex < 0) return;
@@ -1941,10 +2201,6 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     return metadata == null || !metadata.IsOrphan;
                 }).ToList();
             var targetNames = targetRows.Select(row => CellText(row, MappingTargetFieldColumn)).ToList();
-            var descriptions = targetRows.ToDictionary(
-                row => CellText(row, MappingTargetFieldColumn),
-                row => CellText(row, MappingDescriptionColumn),
-                StringComparer.Ordinal);
 
             using (var dialog = new Form
             {
@@ -1992,22 +2248,20 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     FillWeight = 55F
                 });
 
-                foreach (int columnIndex in columns)
+                for (int sourcePosition = 0; sourcePosition < columns.Count; sourcePosition++)
                 {
+                    int columnIndex = columns[sourcePosition];
                     string header = Convert.ToString(
                         _mappingSampleGrid.Rows[headerRow].Cells[columnIndex].Value,
                         CultureInfo.InvariantCulture) ?? string.Empty;
                     string example = Convert.ToString(
                         _mappingSampleGrid.Rows[dataRow].Cells[columnIndex].Value,
                         CultureInfo.InvariantCulture) ?? string.Empty;
-                    string suggested = targetNames.FirstOrDefault(target =>
-                        string.Equals(NormalizeMappingLabel(target), NormalizeMappingLabel(header), StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(NormalizeMappingLabel(descriptions[target]), NormalizeMappingLabel(header), StringComparison.OrdinalIgnoreCase));
                     int index = grid.Rows.Add(
                         ToMappingColumnLetters(columnIndex),
                         header,
                         example,
-                        suggested ?? "（忽略）",
+                        GetRepeatedRowDefaultTarget(targetNames, sourcePosition),
                         string.Empty,
                         false);
                     grid.Rows[index].Tag = columnIndex;
@@ -2028,7 +2282,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 {
                     AutoSize = true,
                     Margin = new Padding(0, 9, 16, 0),
-                    Text = "未选择的源列会忽略；必须且只能选择一个关键列。"
+                    Text = "已按数据模型字段填写顺序预匹配；不正确可下拉修改；必须且只能选择一个关键列。"
                 });
                 dialog.Controls.Add(grid);
                 dialog.Controls.Add(footer);
@@ -2065,6 +2319,14 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 };
                 dialog.ShowDialog(this);
             }
+        }
+
+        private static string GetRepeatedRowDefaultTarget(IList<string> targetNames, int sourcePosition)
+        {
+            if (targetNames == null || sourcePosition < 0 || sourcePosition >= targetNames.Count ||
+                string.IsNullOrWhiteSpace(targetNames[sourcePosition]))
+                return "（忽略）";
+            return targetNames[sourcePosition];
         }
 
         private void ApplyRepeatedRowColumnMappings(

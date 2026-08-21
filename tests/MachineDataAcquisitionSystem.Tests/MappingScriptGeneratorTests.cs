@@ -80,5 +80,85 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             Assert.Throws<MappingValidationException>(() =>
                 new MappingScriptGenerator().Generate(rule));
         }
+
+        [Theory]
+        [InlineData("int", "int?")]
+        [InlineData("long", "long?")]
+        [InlineData("decimal", "decimal?")]
+        [InlineData("float", "float?")]
+        [InlineData("double", "double?")]
+        [InlineData("datetime", "DateTime?")]
+        [InlineData("bool", "bool?")]
+        public void Generate_uses_nullable_contracts_for_optional_value_type_fields(
+            string targetType,
+            string expectedCSharpType)
+        {
+            var rule = new MappingRuleDefinition
+            {
+                RuleName = "optional-value-type",
+                ModelId = 7,
+                TargetModelType = "InspectionRecord",
+                ModelSchemaHash = "schema-v1",
+                NormalizedExtension = ".xlsx",
+                SheetName = "Data",
+                Fields = new List<FieldMappingRule>
+                {
+                    new FieldMappingRule
+                    {
+                        TargetField = "OptionalValue",
+                        TargetType = targetType,
+                        IsRequired = false,
+                        Locator = new MappingLocator
+                        {
+                            Type = "cell",
+                            Cell = "A1",
+                            AnchorCell = "A1",
+                            AnchorText = "Optional value"
+                        }
+                    }
+                }
+            };
+
+            string script = new MappingScriptGenerator().Generate(rule);
+
+            Assert.Contains(
+                expectedCSharpType + " __mappingContract0 = model.OptionalValue;",
+                script);
+        }
+
+        [Fact]
+        public void Generate_keeps_required_value_type_contracts_non_nullable()
+        {
+            var rule = new MappingRuleDefinition
+            {
+                RuleName = "required-value-type",
+                ModelId = 7,
+                TargetModelType = "InspectionRecord",
+                ModelSchemaHash = "schema-v1",
+                NormalizedExtension = ".xlsx",
+                SheetName = "Data",
+                Fields = new List<FieldMappingRule>
+                {
+                    new FieldMappingRule
+                    {
+                        TargetField = "RequiredValue",
+                        TargetType = "decimal",
+                        IsRequired = true,
+                        Locator = new MappingLocator
+                        {
+                            Type = "cell",
+                            Cell = "A1",
+                            AnchorCell = "A1",
+                            AnchorText = "Required value"
+                        }
+                    }
+                }
+            };
+
+            string script = new MappingScriptGenerator().Generate(rule);
+
+            Assert.Contains("decimal __mappingContract0 = model.RequiredValue;", script);
+            Assert.DoesNotContain("decimal? __mappingContract0", script);
+        }
     }
 }

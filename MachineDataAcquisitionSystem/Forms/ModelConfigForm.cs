@@ -26,6 +26,8 @@ namespace MachineDataAcquisitionSystem.Forms
         private int _currentScriptId = -1;
         private Button _btnDeleteModel;
         private Button _btnDeleteScript;
+        private Button _btnImportModels;
+        private Button _btnCreateModelImportTemplate;
         private ContextMenuStrip _modelContextMenu;
         private ToolStripMenuItem _copyModelMenuItem;
         private ToolStripMenuItem _deleteModelMenuItem;
@@ -35,6 +37,7 @@ namespace MachineDataAcquisitionSystem.Forms
             InitializeComponent();
             InitializeMappingUi();
             InitializeDeletionButtons();
+            InitializeModelImportButtons();
             InitializeModelContextMenu();
 
             // 绑定事件
@@ -103,6 +106,191 @@ namespace MachineDataAcquisitionSystem.Forms
             };
             _btnDeleteScript.Click += BtnDeleteScript_Click;
             splitContainer2.Panel1.Controls.Add(_btnDeleteScript);
+        }
+
+        private void InitializeModelImportButtons()
+        {
+            var buttonPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 44,
+                ColumnCount = 2,
+                RowCount = 1,
+                Padding = new Padding(3)
+            };
+            buttonPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+            buttonPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
+
+            _btnImportModels = new Button
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 2, 0),
+                Text = "Excel 导入"
+            };
+            _btnCreateModelImportTemplate = new Button
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(2, 0, 0, 0),
+                Text = "下载模板"
+            };
+            _btnImportModels.Click += BtnImportModels_Click;
+            _btnCreateModelImportTemplate.Click += BtnCreateModelImportTemplate_Click;
+            buttonPanel.Controls.Add(_btnImportModels, 0, 0);
+            buttonPanel.Controls.Add(_btnCreateModelImportTemplate, 1, 0);
+            splitContainer1.Panel1.Controls.Add(buttonPanel);
+            buttonPanel.BringToFront();
+        }
+
+        private void BtnImportModels_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new OpenFileDialog
+            {
+                Title = "选择数据模型 Excel",
+                Filter = "Excel 文件 (*.xlsx;*.xls)|*.xlsx;*.xls",
+                CheckFileExists = true,
+                Multiselect = false
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+
+                try
+                {
+                    var service = new ModelExcelImportService(DatabaseHelper.GetConnectionString());
+                    ModelExcelImportPreview preview = service.Preview(dialog.FileName);
+                    if (!preview.CanImport)
+                    {
+                        MessageBox.Show(
+                            BuildModelImportPreviewMessage(preview),
+                            "Excel 导入校验失败",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    if (MessageBox.Show(
+                            BuildModelImportPreviewMessage(preview) + Environment.NewLine + Environment.NewLine +
+                            "确认新增这些模型吗？导入不会覆盖现有模型。",
+                            "确认 Excel 导入",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question) != DialogResult.Yes)
+                        return;
+
+                    ModelExcelImportResult result = service.Import(preview);
+                    List<string> sourceGenerationErrors = GenerateImportedModelSources(result);
+
+                    LoadModels();
+                    LoadParentModels();
+                    SelectModel(result.FirstModelId);
+
+                    string message = "导入成功：" + result.ModelCount + " 个模型，" +
+                                     result.FieldCount + " 个字段。";
+                    MessageBoxIcon icon = MessageBoxIcon.Information;
+                    if (sourceGenerationErrors.Count > 0)
+                    {
+                        icon = MessageBoxIcon.Warning;
+                        message += Environment.NewLine + Environment.NewLine +
+                                   "以下 Model 类生成失败，可选择模型后点击“保存模型”重试：" +
+                                   Environment.NewLine + string.Join(Environment.NewLine, sourceGenerationErrors);
+                    }
+                    MessageBox.Show(message, "Excel 导入完成", MessageBoxButtons.OK, icon);
+                }
+                catch (ModelExcelImportValidationException ex)
+                {
+                    MessageBox.Show(
+                        BuildModelImportErrorMessage(ex.Errors),
+                        "Excel 导入校验失败",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Excel 导入失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void BtnCreateModelImportTemplate_Click(object sender, EventArgs e)
+        {
+            using (var dialog = new SaveFileDialog
+            {
+                Title = "保存数据模型导入模板",
+                Filter = "Excel 工作簿 (*.xlsx)|*.xlsx",
+                DefaultExt = "xlsx",
+                AddExtension = true,
+                FileName = "数据模型导入模板.xlsx"
+            })
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                try
+                {
+                    new ModelExcelImportService(DatabaseHelper.GetConnectionString())
+                        .CreateTemplate(dialog.FileName);
+                    MessageBox.Show("模板已保存：" + dialog.FileName, "下载模板", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("保存模板失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private List<string> GenerateImportedModelSources(ModelExcelImportResult result)
+        {
+            var errors = new List<string>();
+            foreach (ModelExcelImportedModel imported in result.Models)
+            {
+                try
+                {
+                    var model = new ModelConfig
+                    {
+                        Id = imported.Id,
+                        ModelName = imported.Model.ModelName,
+                        TableName = imported.Model.TableName,
+                        Description = imported.Model.Description,
+                        IsActive = imported.Model.IsActive
+                    };
+                    var fields = imported.Model.Fields.Select(field => new ModelField
+                    {
+                        FieldName = field.FieldName,
+                        FieldType = field.FieldType,
+                        FieldLength = field.FieldLength,
+                        IsRequired = field.IsRequired,
+                        IsPrimaryKey = field.IsPrimaryKey,
+                        IsIdentity = field.IsIdentity,
+                        Description = field.Description
+                    }).ToList();
+                    GenerateModelClass(model, fields, false);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(imported.Model.ModelName + "：" + ex.Message);
+                }
+            }
+            return errors;
+        }
+
+        private static string BuildModelImportPreviewMessage(ModelExcelImportPreview preview)
+        {
+            var builder = new StringBuilder();
+            builder.AppendLine("文件：" + Path.GetFileName(preview.FilePath));
+            builder.AppendLine("模型：" + preview.ModelCount);
+            builder.AppendLine("字段：" + preview.FieldCount);
+            builder.AppendLine("启用模型：" + preview.EnabledModelCount);
+            if (preview.Errors.Count > 0)
+            {
+                builder.AppendLine();
+                builder.Append(BuildModelImportErrorMessage(preview.Errors));
+            }
+            return builder.ToString().TrimEnd();
+        }
+
+        private static string BuildModelImportErrorMessage(IEnumerable<ModelExcelImportError> errors)
+        {
+            List<ModelExcelImportError> list = errors.ToList();
+            var lines = list.Take(20).Select(error => error.ToString()).ToList();
+            if (list.Count > lines.Count)
+                lines.Add("另有 " + (list.Count - lines.Count) + " 个错误未显示，请修正后重新导入。");
+            return string.Join(Environment.NewLine, lines);
         }
 
         private void BtnDeleteModel_Click(object sender, EventArgs e)
@@ -1261,7 +1449,7 @@ namespace MachineDataAcquisitionSystem.Forms
         /// <summary>
         /// 生成 Model 类文件
         /// </summary>
-        private void GenerateModelClass(ModelConfig model, List<ModelField> fields)
+        private void GenerateModelClass(ModelConfig model, List<ModelField> fields, bool showSuccessMessage = true)
         {
             TargetTableDefinition targetSchema = new TargetTableSchemaLoader(
                 DatabaseHelper.GetConnectionString()).Load(model.Id);
@@ -1308,7 +1496,8 @@ namespace MachineDataAcquisitionSystem.Forms
             string filePath = Path.Combine(modelDir, $"{model.ModelName}.cs");
             File.WriteAllText(filePath, sb.ToString(), Encoding.UTF8);
 
-            MessageBox.Show($"Model 类已生成：{filePath}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (showSuccessMessage)
+                MessageBox.Show($"Model 类已生成：{filePath}", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>

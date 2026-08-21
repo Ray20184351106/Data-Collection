@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Drawing;
 using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
@@ -88,6 +90,100 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             Assert.Null(failure);
             Assert.True(sampleTop >= headerBottom, "样本区域不得被顶部配置区遮挡。");
             Assert.True(sampleBottom <= footerTop, "样本区域不得进入底部保存栏。");
+        }
+
+        [Fact]
+        public void Mapping_sample_drag_detects_all_four_scroll_edges()
+        {
+            const BindingFlags Flags = BindingFlags.Static | BindingFlags.NonPublic;
+            MethodInfo method = typeof(ModelConfigForm).GetMethod(
+                "GetMappingSampleAutoScrollDirection",
+                Flags);
+            Assert.NotNull(method);
+
+            var viewport = new Rectangle(56, 24, 320, 200);
+            Assert.Equal(new Point(-1, 0), InvokeDirection(method, new Point(60, 100), viewport));
+            Assert.Equal(new Point(1, 0), InvokeDirection(method, new Point(372, 100), viewport));
+            Assert.Equal(new Point(0, -1), InvokeDirection(method, new Point(200, 28), viewport));
+            Assert.Equal(new Point(0, 1), InvokeDirection(method, new Point(200, 220), viewport));
+            Assert.Equal(Point.Empty, InvokeDirection(method, new Point(200, 100), viewport));
+        }
+
+        [Fact]
+        public void Mapping_sample_drag_keeps_a_rectangular_selection()
+        {
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new ModelConfigForm())
+                    {
+                        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                        var grid = Assert.IsType<DataGridView>(
+                            typeof(ModelConfigForm).GetField("_mappingSampleGrid", Flags).GetValue(form));
+                        for (int column = 0; column < 8; column++)
+                            grid.Columns.Add("C" + column, "C" + column);
+                        grid.Rows.Add(4);
+
+                        MethodInfo method = typeof(ModelConfigForm).GetMethod(
+                            "SelectMappingSampleRange",
+                            Flags);
+                        Assert.NotNull(method);
+                        method.Invoke(form, new object[] { 1, 2, 2, 6 });
+
+                        Assert.Equal(10, grid.SelectedCells.Count);
+                        Assert.True(grid.Rows[1].Cells[2].Selected);
+                        Assert.True(grid.Rows[2].Cells[6].Selected);
+                        Assert.False(grid.Rows[0].Cells[2].Selected);
+                        Assert.False(grid.Rows[1].Cells[7].Selected);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.Null(failure);
+        }
+
+        [Fact]
+        public void Repeated_row_mapping_defaults_follow_model_field_order()
+        {
+            const BindingFlags Flags = BindingFlags.Static | BindingFlags.NonPublic;
+            MethodInfo method = typeof(ModelConfigForm).GetMethod(
+                "GetRepeatedRowDefaultTarget",
+                Flags);
+            Assert.NotNull(method);
+
+            var modelFieldsInConfiguredOrder = new List<string>
+            {
+                "FirstConfiguredField",
+                "SecondConfiguredField",
+                "ThirdConfiguredField"
+            };
+
+            Assert.Equal("FirstConfiguredField", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 0));
+            Assert.Equal("SecondConfiguredField", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 1));
+            Assert.Equal("ThirdConfiguredField", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 2));
+            Assert.Equal("（忽略）", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 3));
+        }
+
+        private static Point InvokeDirection(MethodInfo method, Point pointer, Rectangle viewport)
+        {
+            return (Point)method.Invoke(null, new object[] { pointer, viewport, 24 });
+        }
+
+        private static string InvokeDefaultTarget(
+            MethodInfo method,
+            IList<string> targetNames,
+            int sourcePosition)
+        {
+            return (string)method.Invoke(null, new object[] { targetNames, sourcePosition });
         }
     }
 }
