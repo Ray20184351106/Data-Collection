@@ -83,6 +83,54 @@ namespace MachineDataAcquisitionSystem.Tests.Persistence
         }
 
         [Fact]
+        public void EnsureTable_adds_the_system_parent_column_and_index_idempotently()
+        {
+            string databasePath = Path.Combine(
+                Path.GetTempPath(),
+                "TargetTableProvisioner_" + Guid.NewGuid().ToString("N") + ".db");
+            try
+            {
+                using (var connection = new SQLiteConnection("Data Source=" + databasePath + ";Version=3;"))
+                using (var command = connection.CreateCommand())
+                {
+                    connection.Open();
+                    command.CommandText = @"
+CREATE TABLE AutoCreatedDetail (
+    CID INTEGER NOT NULL PRIMARY KEY,
+    PointName VARCHAR(40) NULL);";
+                    command.ExecuteNonQuery();
+                }
+
+                using (var db = CreateClient(databasePath))
+                {
+                    var provisioner = new TargetTableProvisioner();
+                    TargetTableProvisionResult first = provisioner.EnsureTable(
+                        db,
+                        typeof(ProvisionedDetail),
+                        CreateDetailDefinition());
+                    TargetTableProvisionResult second = provisioner.EnsureTable(
+                        db,
+                        typeof(ProvisionedDetail),
+                        CreateDetailDefinition());
+
+                    Assert.False(first.Created);
+                    Assert.Equal(1, first.AdjustedColumnCount);
+                    Assert.Equal(0, second.AdjustedColumnCount);
+                    Assert.Contains(
+                        db.DbMaintenance.GetColumnInfosByTableName("AutoCreatedDetail", false),
+                        column => string.Equals(column.DbColumnName, "PARENT_CID", StringComparison.OrdinalIgnoreCase));
+                    Assert.Equal(1, db.Ado.GetInt(
+                        "SELECT COUNT(1) FROM sqlite_master " +
+                        "WHERE type='index' AND name='IX_AutoCreatedDetail_PARENT_CID';"));
+                }
+            }
+            finally
+            {
+                if (File.Exists(databasePath)) File.Delete(databasePath);
+            }
+        }
+
+        [Fact]
         public void EnsureTable_refuses_to_rebuild_an_existing_sqlite_table_to_change_nullability()
         {
             string databasePath = Path.Combine(
@@ -212,7 +260,7 @@ CREATE TABLE [AutoCreatedInspection] (
             });
         }
 
-        private static void RunWithLocalSqlServer(Action<SqlSugarClient> assertion)
+        internal static void RunWithLocalSqlServer(Action<SqlSugarClient> assertion)
         {
             string masterConnectionString = Environment.GetEnvironmentVariable(
                 "TARGET_TABLE_SQLSERVER_TEST_MASTER");
@@ -292,6 +340,37 @@ CREATE TABLE [AutoCreatedInspection] (
             };
         }
 
+        private static TargetTableDefinition CreateDetailDefinition()
+        {
+            return new TargetTableDefinition
+            {
+                TableName = "AutoCreatedDetail",
+                Columns = new[]
+                {
+                    new TargetTableColumnDefinition
+                    {
+                        FieldName = "CID",
+                        FieldType = "long",
+                        IsRequired = true,
+                        IsPrimaryKey = true
+                    },
+                    new TargetTableColumnDefinition
+                    {
+                        FieldName = "PARENT_CID",
+                        FieldType = "long",
+                        IsSystemGenerated = true,
+                        SystemRole = "ParentCid"
+                    },
+                    new TargetTableColumnDefinition
+                    {
+                        FieldName = "PointName",
+                        FieldType = "string",
+                        FieldLength = 40
+                    }
+                }
+            };
+        }
+
         [SugarTable("AutoCreatedInspection")]
         public sealed class ProvisionedInspection
         {
@@ -303,6 +382,14 @@ CREATE TABLE [AutoCreatedInspection] (
         public sealed class UnmappedInspection
         {
             public string Value { get; set; }
+        }
+
+        [SugarTable("AutoCreatedDetail")]
+        public sealed class ProvisionedDetail
+        {
+            public long CID { get; set; }
+            public long? PARENT_CID { get; set; }
+            public string PointName { get; set; }
         }
     }
 }

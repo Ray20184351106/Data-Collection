@@ -5,6 +5,7 @@ using System.Data.SQLite;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using MachineDataAcquisitionSystem.Core;
 
 namespace MachineDataAcquisitionSystem.Core.Mapping
 {
@@ -105,6 +106,19 @@ CREATE TABLE IF NOT EXISTS ParseRuleVersions (
     CONSTRAINT CK_ParseRuleVersions_Status CHECK (Status IN (0, 1, 2, 3))
 );
 
+CREATE TABLE IF NOT EXISTS ParseRuleVersionModels (
+    ParseRuleVersionId INTEGER NOT NULL,
+    Role TEXT NOT NULL,
+    ModelId INTEGER NOT NULL,
+    ModelType TEXT NOT NULL,
+    ModelSchemaHash TEXT NOT NULL,
+    GeneratedModelCodeSnapshot TEXT NOT NULL,
+    GeneratedModelCodeSha256 TEXT NOT NULL,
+    PRIMARY KEY (ParseRuleVersionId, Role),
+    CONSTRAINT FK_ParseRuleVersionModels_Version
+        FOREIGN KEY (ParseRuleVersionId) REFERENCES ParseRuleVersions(Id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS PublishedParseRuleBindings (
     MachineId TEXT NOT NULL,
     NormalizedExtension TEXT NOT NULL,
@@ -119,6 +133,8 @@ CREATE INDEX IF NOT EXISTS IX_ParseRuleDefinitions_ModelId
     ON ParseRuleDefinitions(ModelId);
 CREATE INDEX IF NOT EXISTS IX_ParseRuleVersions_DefinitionId
     ON ParseRuleVersions(DefinitionId, VersionNumber);
+CREATE INDEX IF NOT EXISTS IX_ParseRuleVersionModels_ModelId
+    ON ParseRuleVersionModels(ModelId, ParseRuleVersionId);
 CREATE INDEX IF NOT EXISTS IX_PublishedParseRuleBindings_VersionId
     ON PublishedParseRuleBindings(ParseRuleVersionId);
 ");
@@ -213,7 +229,7 @@ CREATE INDEX IF NOT EXISTS IX_PublishedParseRuleBindings_VersionId
                 definition.TargetModelType = targetModelType;
                 definition.ModelSchemaHash = modelSchemaHash;
                 definition.NormalizedExtension = normalizedExtension;
-                EnsureModelSchemaCurrent(connection, transaction, definition.ModelId, modelSchemaHash);
+                EnsureDefinitionModelsCurrent(connection, transaction, definition);
                 EnsureMappingTargetsCurrent(connection, transaction, definition, false);
 
                 string definitionJson = MappingRuleSerializer.Serialize(definition);
@@ -235,6 +251,11 @@ CREATE INDEX IF NOT EXISTS IX_PublishedParseRuleBindings_VersionId
                     now,
                     null,
                     null);
+                SaveVersionModelDependencies(
+                    connection,
+                    transaction,
+                    versionId,
+                    definition);
 
                 ParseRuleVersion result = LoadVersion(connection, transaction, versionId);
                 transaction.Commit();
@@ -262,7 +283,7 @@ CREATE INDEX IF NOT EXISTS IX_PublishedParseRuleBindings_VersionId
                 EnsureExpectedRevision(version, expectedRevision);
                 EnsureVersionIsDefinitionHead(connection, transaction, version);
                 ParseRuleIntegrityValidator.Validate(version);
-                EnsureModelSchemaCurrent(connection, transaction, version.ModelId, version.ModelSchemaHash);
+                EnsureVersionModelsCurrent(connection, transaction, version);
                 EnsureVersionMappingTargetsCurrent(connection, transaction, version);
 
                 if (version.Status != ParseRuleStatus.Draft)
@@ -387,7 +408,7 @@ WHERE Id = @Id AND Revision = @ExpectedRevision AND Status = @ExpectedStatus;"))
                 EnsureExpectedRevision(version, expectedRevision);
                 EnsureVersionIsDefinitionHead(connection, transaction, version);
                 ParseRuleIntegrityValidator.Validate(version);
-                EnsureModelSchemaCurrent(connection, transaction, version.ModelId, version.ModelSchemaHash);
+                EnsureVersionModelsCurrent(connection, transaction, version);
                 EnsureVersionMappingTargetsCurrent(connection, transaction, version);
 
                 if (version.Status != ParseRuleStatus.Validated &&
@@ -645,7 +666,7 @@ ORDER BY b.MachineId;"))
                 ParseRuleVersion historical = LoadVersion(connection, transaction, historicalVersionId);
                 EnsureVersionExists(historical);
                 ParseRuleIntegrityValidator.Validate(historical);
-                EnsureModelSchemaCurrent(connection, transaction, historical.ModelId, historical.ModelSchemaHash);
+                EnsureVersionModelsCurrent(connection, transaction, historical);
                 EnsureVersionMappingTargetsCurrent(connection, transaction, historical);
                 if (historical.Status != ParseRuleStatus.Published &&
                     historical.Status != ParseRuleStatus.Superseded)
@@ -1273,6 +1294,35 @@ WHERE ModelId = @ModelId;"))
             MappingRuleDefinition definition,
             bool requireAllRequiredFields)
         {
+            if (definition.RecordMode == MappingRecordMode.MasterDetail)
+            {
+                EnsureMappingTargetCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Master,
+                    requireAllRequiredFields);
+                EnsureCidFieldCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Master.ModelId,
+                    "主模型");
+                EnsureMappingTargetCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Detail,
+                    requireAllRequiredFields);
+                EnsureCidFieldCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Detail.ModelId,
+                    "子模型");
+                EnsureRelationFieldCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Detail.ModelId,
+                    definition.MasterDetail.ParentCidField);
+                return;
+            }
             if (TableExists(connection, transaction, "DataModels"))
             {
                 using (SQLiteCommand command = CreateCommand(connection, transaction,
@@ -1342,6 +1392,252 @@ WHERE ModelId = @ModelId;"))
             if (missingRequired.Length > 0)
                 throw new MappingValidationException(
                     "Required target model fields are not mapped: " + string.Join(", ", missingRequired));
+        }
+
+        private static void EnsureMappingTargetCurrent(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            MappingTargetDefinition target,
+            bool requireAllRequiredFields)
+        {
+            if (TableExists(connection, transaction, "DataModels"))
+            {
+                using (SQLiteCommand command = CreateCommand(connection, transaction,
+                    "SELECT ModelName FROM DataModels WHERE Id=@ModelId AND IsActive=1;"))
+                {
+                    AddParameter(command, "@ModelId", DbType.Int32, target.ModelId);
+                    object value = command.ExecuteScalar();
+                    if (value == null || value == DBNull.Value || !string.Equals(
+                        Convert.ToString(value, CultureInfo.InvariantCulture),
+                        target.TargetModelType,
+                        StringComparison.Ordinal))
+                        throw new MappingValidationException("主子表目标模型不存在、未启用或名称不匹配。");
+                }
+            }
+            if (!TableExists(connection, transaction, "ModelFields")) return;
+            var fields = new Dictionary<string, ModelSchemaField>(StringComparer.Ordinal);
+            using (SQLiteCommand command = CreateCommand(connection, transaction, @"
+SELECT FieldName,FieldType,IsRequired FROM ModelFields WHERE ModelId=@ModelId;"))
+            {
+                AddParameter(command, "@ModelId", DbType.Int32, target.ModelId);
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string name = reader.GetString(0);
+                        if (fields.ContainsKey(name))
+                            throw new MappingValidationException("目标模型包含重复字段：" + name);
+                        fields.Add(name, new ModelSchemaField
+                        {
+                            FieldName = name,
+                            FieldType = reader.GetString(1),
+                            IsRequired = !reader.IsDBNull(2) && reader.GetInt32(2) != 0
+                        });
+                    }
+                }
+            }
+            foreach (FieldMappingRule mapped in target.Fields)
+            {
+                ModelSchemaField current;
+                if (!fields.TryGetValue(mapped.TargetField, out current))
+                    throw new MappingValidationException("目标模型字段不存在：" + mapped.TargetField);
+                if (!string.Equals(current.FieldType, mapped.TargetType, StringComparison.OrdinalIgnoreCase) ||
+                    current.IsRequired != mapped.IsRequired)
+                    throw new MappingValidationException("目标模型字段类型或必填属性已变化：" + mapped.TargetField);
+            }
+            if (!requireAllRequiredFields) return;
+            var mappedNames = new HashSet<string>(target.Fields.Select(field => field.TargetField), StringComparer.Ordinal);
+            string[] missing = fields.Values
+                .Where(field => field.IsRequired &&
+                    !string.Equals(field.FieldName, "CID", StringComparison.OrdinalIgnoreCase) &&
+                    !mappedNames.Contains(field.FieldName))
+                .Select(field => field.FieldName)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            if (missing.Length > 0)
+                throw new MappingValidationException("必填目标字段尚未映射：" + string.Join(", ", missing));
+        }
+
+        private static void EnsureRelationFieldCurrent(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            int modelId,
+            string fieldName)
+        {
+            if (!TableExists(connection, transaction, "ModelFields")) return;
+            using (SQLiteCommand command = CreateCommand(connection, transaction, @"
+SELECT FieldType,IsRequired,IsPrimaryKey,IsIdentity
+FROM ModelFields WHERE ModelId=@ModelId AND FieldName=@FieldName;"))
+            {
+                AddParameter(command, "@ModelId", DbType.Int32, modelId);
+                AddParameter(command, "@FieldName", DbType.String, fieldName);
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    if (!reader.Read())
+                        throw new MappingValidationException("子模型缺少系统关联字段：" + fieldName);
+                    if (!string.Equals(reader.GetString(0), "long", StringComparison.OrdinalIgnoreCase) ||
+                        (!reader.IsDBNull(1) && reader.GetInt32(1) != 0) ||
+                        (!reader.IsDBNull(2) && reader.GetInt32(2) != 0) ||
+                        (!reader.IsDBNull(3) && reader.GetInt32(3) != 0))
+                        throw new MappingValidationException("子模型关联字段必须是可空 long 类型、非主键且非自增字段。");
+                }
+            }
+        }
+
+        private static void EnsureCidFieldCurrent(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            int modelId,
+            string role)
+        {
+            int currentModelId = modelId;
+            var visited = new HashSet<int>();
+            while (currentModelId > 0)
+            {
+                if (!visited.Add(currentModelId))
+                    throw new MappingValidationException("数据模型继承关系存在循环。");
+                using (SQLiteCommand fieldCommand = CreateCommand(connection, transaction, @"
+SELECT FieldType,IsRequired,IsIdentity
+FROM ModelFields
+WHERE ModelId=@ModelId AND UPPER(FieldName)='CID';"))
+                {
+                    AddParameter(fieldCommand, "@ModelId", DbType.Int32, currentModelId);
+                    using (SQLiteDataReader reader = fieldCommand.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            bool compatible = string.Equals(reader.GetString(0), "long", StringComparison.OrdinalIgnoreCase) &&
+                                !reader.IsDBNull(1) && reader.GetInt32(1) != 0 &&
+                                (reader.IsDBNull(2) || reader.GetInt32(2) == 0);
+                            if (reader.Read())
+                                throw new MappingValidationException(role + "包含重复的 CID 字段。");
+                            if (!compatible)
+                                throw new MappingValidationException(role + "的 CID 必须是必填、非自增的 long 字段。");
+                            return;
+                        }
+                    }
+                }
+
+                int parentModelId;
+                using (SQLiteCommand modelCommand = CreateCommand(connection, transaction,
+                    "SELECT ParentModelId FROM DataModels WHERE Id=@ModelId AND IsActive=1;"))
+                {
+                    AddParameter(modelCommand, "@ModelId", DbType.Int32, currentModelId);
+                    object value = modelCommand.ExecuteScalar();
+                    if (value == null || value == DBNull.Value)
+                        throw new MappingValidationException(role + "不存在或未启用。");
+                    parentModelId = Convert.ToInt32(value, CultureInfo.InvariantCulture);
+                }
+                if (parentModelId == -2)
+                {
+                    if (!TableExists(connection, transaction, "BaseFields")) break;
+                    using (SQLiteCommand baseCommand = CreateCommand(connection, transaction, @"
+SELECT FieldType,IsRequired
+FROM BaseFields
+WHERE UPPER(FieldName)='CID';"))
+                    using (SQLiteDataReader reader = baseCommand.ExecuteReader())
+                    {
+                        if (!reader.Read()) break;
+                        bool compatible = string.Equals(reader.GetString(0), "long", StringComparison.OrdinalIgnoreCase) &&
+                            !reader.IsDBNull(1) && reader.GetInt32(1) != 0;
+                        if (reader.Read())
+                            throw new MappingValidationException("BaseEntity 包含重复的 CID 字段。");
+                        if (!compatible)
+                            throw new MappingValidationException("BaseEntity 的 CID 必须是必填 long 字段。");
+                        return;
+                    }
+                }
+                currentModelId = parentModelId;
+            }
+            throw new MappingValidationException(role + "缺少兼容的 long CID 字段。");
+        }
+
+        private static void EnsureDefinitionModelsCurrent(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            MappingRuleDefinition definition)
+        {
+            EnsureModelSchemaCurrent(
+                connection,
+                transaction,
+                definition.ModelId,
+                definition.ModelSchemaHash);
+            if (definition.RecordMode == MappingRecordMode.MasterDetail)
+            {
+                EnsureModelSchemaCurrent(
+                    connection,
+                    transaction,
+                    definition.MasterDetail.Detail.ModelId,
+                    definition.MasterDetail.Detail.ModelSchemaHash);
+            }
+        }
+
+        private static void EnsureVersionModelsCurrent(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            ParseRuleVersion version)
+        {
+            if (version.RuleType != ParseRuleType.Mapping)
+            {
+                EnsureModelSchemaCurrent(
+                    connection,
+                    transaction,
+                    version.ModelId,
+                    version.ModelSchemaHash);
+                return;
+            }
+            MappingRuleDefinition definition = MappingRuleSerializer.Deserialize(version.DefinitionJson);
+            MappingRuleSerializer.ValidateDefinition(definition);
+            EnsureDefinitionModelsCurrent(connection, transaction, definition);
+        }
+
+        private static void SaveVersionModelDependencies(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            long versionId,
+            MappingRuleDefinition definition)
+        {
+            if (definition.RecordMode != MappingRecordMode.MasterDetail) return;
+            SaveVersionModelDependency(connection, transaction, versionId, "Master", definition.MasterDetail.Master);
+            SaveVersionModelDependency(connection, transaction, versionId, "Detail", definition.MasterDetail.Detail);
+        }
+
+        private static void SaveVersionModelDependency(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            long versionId,
+            string role,
+            MappingTargetDefinition target)
+        {
+            string tableName;
+            using (SQLiteCommand command = CreateCommand(connection, transaction,
+                "SELECT TableName FROM DataModels WHERE Id=@ModelId AND IsActive=1;"))
+            {
+                AddParameter(command, "@ModelId", DbType.Int32, target.ModelId);
+                object value = command.ExecuteScalar();
+                if (value == null || value == DBNull.Value || string.IsNullOrWhiteSpace(value.ToString()))
+                    throw new MappingValidationException("目标模型缺少物理表名。");
+                tableName = value.ToString();
+            }
+            string source = ModelTableMapping.ApplySqlSugarTableAttribute(
+                ScriptEngine.CaptureGeneratedModelCode(target.TargetModelType),
+                tableName);
+            using (SQLiteCommand command = CreateCommand(connection, transaction, @"
+INSERT INTO ParseRuleVersionModels
+    (ParseRuleVersionId,Role,ModelId,ModelType,ModelSchemaHash,
+     GeneratedModelCodeSnapshot,GeneratedModelCodeSha256)
+VALUES
+    (@VersionId,@Role,@ModelId,@ModelType,@SchemaHash,@Source,@SourceHash);"))
+            {
+                AddParameter(command, "@VersionId", DbType.Int64, versionId);
+                AddParameter(command, "@Role", DbType.String, role);
+                AddParameter(command, "@ModelId", DbType.Int32, target.ModelId);
+                AddParameter(command, "@ModelType", DbType.String, target.TargetModelType);
+                AddParameter(command, "@SchemaHash", DbType.String, target.ModelSchemaHash);
+                AddParameter(command, "@Source", DbType.String, source);
+                AddParameter(command, "@SourceHash", DbType.String, MappingRuleSerializer.Sha256(source));
+                command.ExecuteNonQuery();
+            }
         }
 
         private static void EnsureVersionMappingTargetsCurrent(

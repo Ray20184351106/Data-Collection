@@ -182,6 +182,7 @@
     <Compile Include="Core\ModelCatalogService.cs" />
     <Compile Include="Core\ModelExcelImportService.cs" />
     <Compile Include="Core\ModelIdentityInitializer.cs" />
+    <Compile Include="Core\MasterDetailPersistenceService.cs" />
     <Compile Include="Core\ModelTableMapping.cs" />
     <Compile Include="Core\TargetTableProvisioner.cs" />
     <Compile Include="Core\TargetTableSchemaLoader.cs" />
@@ -189,12 +190,14 @@
     <Compile Include="Core\Mapping\AiMappingClient.cs" />
     <Compile Include="Core\Mapping\ConfigurationDeletionService.cs" />
     <Compile Include="Core\Mapping\ExcelMappingPreviewService.cs" />
+    <Compile Include="Core\Mapping\FileNameExtractionParser.cs" />
     <Compile Include="Core\Mapping\LegacyScriptVersionService.cs" />
     <Compile Include="Core\Mapping\MappingContracts.cs" />
     <Compile Include="Core\Mapping\MappingRuleSerializer.cs" />
     <Compile Include="Core\Mapping\MappingSavePolicy.cs" />
     <Compile Include="Core\Mapping\MappingRuntime.cs" />
     <Compile Include="Core\Mapping\MappingScriptGenerator.cs" />
+    <Compile Include="Core\Mapping\MasterDetailConfigurationService.cs" />
     <Compile Include="Core\Mapping\ModelCopyService.cs" />
     <Compile Include="Core\Mapping\ModelSchemaService.cs" />
     <Compile Include="Core\Mapping\ParseRuleStore.cs" />
@@ -206,6 +209,8 @@
     <Compile Include="Core\Parser\TxtParser.cs" />
     <Compile Include="Core\ScriptEngine.cs" />
     <Compile Include="Core\ScriptMatcher.cs" />
+    <Compile Include="Core\StartupRegistrationService.cs" />
+    <Compile Include="Core\TrayClosePolicy.cs" />
     <Compile Include="Data\IDataRepository.cs" />
     <Compile Include="Data\MockRepository.cs" />
     <Compile Include="Forms\BaseFieldConfigForm.cs">

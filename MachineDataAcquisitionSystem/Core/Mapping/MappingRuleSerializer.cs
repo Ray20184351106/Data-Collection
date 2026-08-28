@@ -30,7 +30,11 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         }, StringComparer.Ordinal);
 
         public static readonly ISet<string> AllowedLocatorTypes = new HashSet<string>(
-            new[] { "cell", "labelOffset", "rowKey", "headerColumn", "rowColumn" },
+            new[]
+            {
+                "cell", "labelOffset", "rowKey", "headerColumn", "rowColumn",
+                "fileNameFull", "fileNameStem", "fileNameSegment"
+            },
             StringComparer.Ordinal);
 
         public static readonly ISet<string> AiAllowedLocatorTypes = new HashSet<string>(
@@ -100,7 +104,23 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 if (field != null)
                     field.Transforms = field.Transforms ?? new List<string>();
             }
+            if (rule.MasterDetail != null)
+            {
+                InitializeTarget(rule.MasterDetail.Master);
+                InitializeTarget(rule.MasterDetail.Detail);
+            }
             return rule;
+        }
+
+        private static void InitializeTarget(MappingTargetDefinition target)
+        {
+            if (target == null) return;
+            target.Fields = target.Fields ?? new List<FieldMappingRule>();
+            foreach (FieldMappingRule field in target.Fields)
+            {
+                if (field != null)
+                    field.Transforms = field.Transforms ?? new List<string>();
+            }
         }
 
         public static string Sha256(string value)
@@ -155,6 +175,13 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             ValidateTextLength(rule.TemplateSignature, 256, "模板签名");
             if (!Enum.IsDefined(typeof(MappingRecordMode), rule.RecordMode))
                 throw new MappingValidationException("记录模式无效。");
+            if (rule.RecordMode == MappingRecordMode.MasterDetail)
+            {
+                ValidateMasterDetail(rule);
+                return;
+            }
+            if (rule.MasterDetail != null)
+                throw new MappingValidationException("单表规则不能包含主子表配置。");
             ValidateRepeatedRows(rule);
             if (rule.Fields == null || rule.Fields.Count == 0)
                 throw new MappingValidationException("映射至少需要一个目标字段。");
@@ -210,6 +237,141 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 if (!rowFields.Any(field => field.Locator != null &&
                     field.Locator.ColumnOffset == rule.RepeatedRows.KeyColumnOffset))
                     throw new MappingValidationException("重复行关键列必须映射到一个目标字段。");
+            }
+        }
+
+        private static void ValidateMasterDetail(MappingRuleDefinition rule)
+        {
+            if (rule.RepeatedRows != null)
+                throw new MappingValidationException("主子表规则的重复行配置必须属于子模型。");
+            if (rule.Fields != null && rule.Fields.Count > 0)
+                throw new MappingValidationException("主子表规则不能使用旧版顶层字段集合。");
+            MasterDetailMappingDefinition definition = rule.MasterDetail;
+            if (definition == null || definition.Master == null || definition.Detail == null)
+                throw new MappingValidationException("主子表规则必须同时配置主模型和子模型。");
+            if (definition.FileName == null)
+                throw new MappingValidationException("主子表规则缺少文件名解析配置。");
+            if (definition.FileName.ExpectedSegmentCount < 0 ||
+                definition.FileName.ExpectedSegmentCount > FileNameExtractionParser.MaximumSegments)
+                throw new MappingValidationException("文件名片段数量超出允许范围。");
+            if (!IsIdentifier(definition.ParentCidField) ||
+                string.Equals(definition.ParentCidField, "CID", StringComparison.OrdinalIgnoreCase))
+                throw new MappingValidationException("子表关联字段必须是非 CID 的合法标识符。");
+
+            ValidateTargetIdentity(definition.Master, "主模型");
+            ValidateTargetIdentity(definition.Detail, "子模型");
+            if (definition.Master.ModelId == definition.Detail.ModelId)
+                throw new MappingValidationException("主模型和子模型不能是同一个模型。");
+            if (definition.Master.ModelId != rule.ModelId ||
+                !string.Equals(definition.Master.TargetModelType, rule.TargetModelType, StringComparison.Ordinal) ||
+                !string.Equals(definition.Master.ModelSchemaHash, rule.ModelSchemaHash, StringComparison.Ordinal))
+                throw new MappingValidationException("主模型配置必须与规则顶层模型身份一致。");
+            if (definition.Master.RepeatedRows != null)
+                throw new MappingValidationException("主模型不能包含重复行配置。");
+            ValidateTargetFields(
+                definition.Master.Fields,
+                null,
+                true,
+                definition.FileName.ExpectedSegmentCount,
+                "主模型");
+
+            if (definition.Detail.Fields.Any(field =>
+                field != null && string.Equals(
+                    field.TargetField,
+                    definition.ParentCidField,
+                    StringComparison.Ordinal)))
+                throw new MappingValidationException("子表关联字段由系统写入，不能参与内容映射。");
+            var repeatedRule = new MappingRuleDefinition
+            {
+                RecordMode = MappingRecordMode.RepeatingRows,
+                RepeatedRows = definition.Detail.RepeatedRows
+            };
+            ValidateRepeatedRows(repeatedRule);
+            ValidateTargetFields(
+                definition.Detail.Fields,
+                definition.Detail.RepeatedRows,
+                false,
+                0,
+                "子模型");
+        }
+
+        private static void ValidateTargetIdentity(MappingTargetDefinition target, string label)
+        {
+            if (target.ModelId <= 0)
+                throw new MappingValidationException(label + "必须关联现有模型。");
+            if (!IsIdentifier(target.TargetModelType))
+                throw new MappingValidationException(label + "类型不是安全的 C# 标识符。");
+            ValidateTextLength(target.TargetModelType, 128, label + "类型");
+            if (string.IsNullOrWhiteSpace(target.ModelSchemaHash))
+                throw new MappingValidationException(label + "结构哈希不能为空。");
+            ValidateTextLength(target.ModelSchemaHash, 256, label + "结构哈希");
+        }
+
+        private static void ValidateTargetFields(
+            IList<FieldMappingRule> fields,
+            RepeatedRowDefinition repeatedRows,
+            bool fileNameOnly,
+            int expectedSegmentCount,
+            string label)
+        {
+            if (fields == null || fields.Count == 0)
+                throw new MappingValidationException(label + "至少需要一个目标字段映射。");
+            if (fields.Count > MaximumMappedFields)
+                throw new MappingValidationException(label + "映射字段数量超过上限。");
+
+            var targetNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (FieldMappingRule field in fields)
+            {
+                if (field == null || !IsIdentifier(field.TargetField))
+                    throw new MappingValidationException(label + "目标字段名称无效。");
+                if (!targetNames.Add(field.TargetField))
+                    throw new MappingValidationException(label + "目标字段不能重复：" + field.TargetField);
+                if (!AllowedTargetTypes.Contains((field.TargetType ?? string.Empty).Trim()))
+                    throw new MappingValidationException(label + "目标字段类型不受支持：" + field.TargetField);
+                if (!Enum.IsDefined(typeof(MappingFieldScope), field.Scope))
+                    throw new MappingValidationException(label + "字段来源范围无效：" + field.TargetField);
+                ValidateTextLength(field.TargetDescription, MaximumRuleTextLength, "目标字段说明");
+                ValidateTextLength(field.DefaultValue, MaximumRuleTextLength, "默认值");
+                ValidateLocator(field.Locator);
+                string locatorType = field.Locator.Type ?? string.Empty;
+                bool isFileName = locatorType == "fileNameFull" ||
+                                  locatorType == "fileNameStem" ||
+                                  locatorType == "fileNameSegment";
+                bool isRow = locatorType == "rowColumn";
+                if (fileNameOnly && (!isFileName || field.Scope != MappingFieldScope.Common))
+                    throw new MappingValidationException("主模型字段首版只能来自文件名。");
+                if (!fileNameOnly && (isFileName || (field.Scope == MappingFieldScope.RowColumn) != isRow))
+                    throw new MappingValidationException("子模型字段来源范围与定位方式不一致：" + field.TargetField);
+                if (locatorType == "fileNameSegment" &&
+                    (field.Locator.SegmentIndex < 0 || field.Locator.SegmentIndex >= expectedSegmentCount))
+                    throw new MappingValidationException("文件名片段索引超出样本范围：" + field.TargetField);
+                if (isRow && repeatedRows != null &&
+                    (field.Locator.ColumnOffset < repeatedRows.FirstColumnOffset ||
+                     field.Locator.ColumnOffset > repeatedRows.LastColumnOffset))
+                    throw new MappingValidationException("明细列映射超出已配置的重复行列范围。");
+
+                var transforms = field.Transforms ?? new List<string>();
+                if (transforms.Count > AllowedTransforms.Count ||
+                    transforms.Distinct(StringComparer.Ordinal).Count() != transforms.Count)
+                    throw new MappingValidationException("转换器不能重复且数量不能超过白名单范围。");
+                foreach (string transform in transforms)
+                {
+                    if (!AllowedTransforms.Contains(transform))
+                        throw new MappingValidationException("不允许的转换器：" + transform);
+                }
+                ValidateTransformParameters(field);
+            }
+
+            if (!fileNameOnly)
+            {
+                List<FieldMappingRule> rowFields = fields
+                    .Where(field => field.Scope == MappingFieldScope.RowColumn)
+                    .ToList();
+                if (rowFields.Count == 0)
+                    throw new MappingValidationException("子模型至少需要一个重复行字段。");
+                if (!rowFields.Any(field =>
+                    field.Locator.ColumnOffset == repeatedRows.KeyColumnOffset))
+                    throw new MappingValidationException("子模型重复行关键列必须映射到目标字段。");
             }
         }
 
@@ -300,6 +462,19 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 if (!string.IsNullOrEmpty(locator.Cell) || !string.IsNullOrEmpty(locator.AnchorCell) ||
                     !string.IsNullOrEmpty(locator.AnchorText) || !string.IsNullOrEmpty(locator.ValueColumn))
                     throw new MappingValidationException("重复行列定位只能包含列偏移和可选表头文本。");
+            }
+            else if (string.Equals(locator.Type, "fileNameFull", StringComparison.Ordinal) ||
+                    string.Equals(locator.Type, "fileNameStem", StringComparison.Ordinal) ||
+                    string.Equals(locator.Type, "fileNameSegment", StringComparison.Ordinal))
+            {
+                if (!string.IsNullOrEmpty(locator.Cell) || !string.IsNullOrEmpty(locator.AnchorCell) ||
+                    !string.IsNullOrEmpty(locator.AnchorText) || !string.IsNullOrEmpty(locator.Text) ||
+                    !string.IsNullOrEmpty(locator.ValueColumn) || locator.RowOffset != 0 ||
+                    locator.ColumnOffset != 0 || locator.DataRowOffset != 0)
+                    throw new MappingValidationException("文件名定位器包含不允许的工作表参数。");
+                if (!string.Equals(locator.Type, "fileNameSegment", StringComparison.Ordinal) &&
+                    locator.SegmentIndex != 0)
+                    throw new MappingValidationException("完整文件名定位器不能配置片段索引。");
             }
             else
             {

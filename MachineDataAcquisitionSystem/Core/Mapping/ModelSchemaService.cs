@@ -147,6 +147,54 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 WHERE d.ModelId = @ModelId AND v.Status = @PublishedStatus;";
                 command.Parameters.AddWithValue("@ModelId", modelId);
                 command.Parameters.AddWithValue("@PublishedStatus", (int)ParseRuleStatus.Published);
+                if (Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0)
+                    return true;
+            }
+            if (!TableExists(connection, transaction, "ParseRuleVersionModels")) return false;
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT COUNT(*)
+FROM PublishedParseRuleBindings b
+INNER JOIN ParseRuleVersions v ON v.Id=b.ParseRuleVersionId
+INNER JOIN ParseRuleVersionModels m ON m.ParseRuleVersionId=v.Id
+WHERE m.ModelId=@ModelId AND v.Status=@PublishedStatus;";
+                command.Parameters.AddWithValue("@ModelId", modelId);
+                command.Parameters.AddWithValue("@PublishedStatus", (int)ParseRuleStatus.Published);
+                return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+            }
+        }
+
+        public string LoadTableName(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            int modelId)
+        {
+            if (connection == null) throw new ArgumentNullException(nameof(connection));
+            using (var command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = "SELECT TableName FROM DataModels WHERE Id = @ModelId;";
+                command.Parameters.AddWithValue("@ModelId", modelId);
+                object value = command.ExecuteScalar();
+                return value == null || value == DBNull.Value
+                    ? null
+                    : Convert.ToString(value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static bool TableExists(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            string tableName)
+        {
+            using (SQLiteCommand command = connection.CreateCommand())
+            {
+                command.Transaction = transaction;
+                command.CommandText = @"
+SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name=@Name;";
+                command.Parameters.AddWithValue("@Name", tableName);
                 return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
             }
         }

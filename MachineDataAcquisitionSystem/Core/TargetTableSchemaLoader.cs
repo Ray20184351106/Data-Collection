@@ -97,11 +97,16 @@ FROM BaseFields ORDER BY SortOrder,Id;";
             int modelId,
             ICollection<TargetTableColumnDefinition> columns)
         {
+            bool hasSystemGenerated = HasColumn(connection, "ModelFields", "IsSystemGenerated");
+            bool hasSystemRole = HasColumn(connection, "ModelFields", "SystemRole");
             using (var command = connection.CreateCommand())
             {
-                command.CommandText = @"
-SELECT FieldName,FieldType,FieldLength,IsRequired,IsPrimaryKey,IsIdentity,Description
-FROM ModelFields WHERE ModelId=@ModelId ORDER BY Id;";
+                command.CommandText = string.Format(@"
+SELECT FieldName,FieldType,FieldLength,IsRequired,IsPrimaryKey,IsIdentity,Description,
+       {0} AS IsSystemGenerated,{1} AS SystemRole
+FROM ModelFields WHERE ModelId=@ModelId ORDER BY Id;",
+                    hasSystemGenerated ? "IsSystemGenerated" : "0",
+                    hasSystemRole ? "SystemRole" : "NULL");
                 command.Parameters.Add("@ModelId", DbType.Int32).Value = modelId;
                 using (SQLiteDataReader reader = command.ExecuteReader())
                 {
@@ -115,11 +120,33 @@ FROM ModelFields WHERE ModelId=@ModelId ORDER BY Id;";
                             IsRequired = !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
                             IsPrimaryKey = !reader.IsDBNull(4) && reader.GetInt32(4) != 0,
                             IsIdentity = !reader.IsDBNull(5) && reader.GetInt32(5) != 0,
-                            Description = reader.IsDBNull(6) ? string.Empty : reader.GetString(6)
+                            Description = reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
+                            IsSystemGenerated = !reader.IsDBNull(7) && reader.GetInt32(7) != 0,
+                            SystemRole = reader.IsDBNull(8) ? null : reader.GetString(8)
                         });
                     }
                 }
             }
+        }
+
+        private static bool HasColumn(
+            SQLiteConnection connection,
+            string tableName,
+            string columnName)
+        {
+            using (var command = connection.CreateCommand())
+            {
+                command.CommandText = "PRAGMA table_info(\"" + tableName + "\");";
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+            }
+            return false;
         }
     }
 }

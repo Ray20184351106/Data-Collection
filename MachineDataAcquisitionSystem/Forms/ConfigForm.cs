@@ -29,13 +29,19 @@ namespace MachineDataAcquisitionSystem.Forms
         private Button _aiMappingSaveButton;
         private Button _aiMappingTestButton;
         private Label _aiMappingStatusLabel;
+        private CheckBox _autoStartCheckBox;
+        private Button _basicSettingsSaveButton;
+        private Label _basicSettingsStatusLabel;
+        private readonly StartupRegistrationService _startupRegistrationService = new StartupRegistrationService();
         private bool _configurationLoaded;
         private bool _configurationHasUnsavedEdits;
+        private bool _basicConfigurationHasUnsavedEdits;
         private bool _reloadingConfiguration;
 
         public ConfigForm()
         {
             InitializeComponent();
+            InitializeBasicSettingsEditor();
             InitializeAiMappingEditor();
 
             this.Load += ConfigForm_Load;
@@ -65,6 +71,62 @@ namespace MachineDataAcquisitionSystem.Forms
             menuDelete.Click += menuDelete_Click;
             menuSetPrimary.Click += MenuSetPrimary_Click;
             menuTestConn.Click += btnTestConn_Click;
+        }
+
+        private void InitializeBasicSettingsEditor()
+        {
+            var titleLabel = new Label
+            {
+                AutoSize = true,
+                Font = new Font("微软雅黑", 14F, FontStyle.Bold),
+                Text = "程序启动"
+            };
+            _autoStartCheckBox = new CheckBox
+            {
+                AutoSize = true,
+                Margin = new Padding(3, 18, 3, 3),
+                Text = "Windows 登录后自动启动本程序"
+            };
+            var descriptionLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Margin = new Padding(28, 8, 3, 3),
+                Text = "仅对当前 Windows 用户生效，不需要管理员权限。"
+            };
+            _basicSettingsSaveButton = new Button
+            {
+                AutoSize = true,
+                Height = 38,
+                Margin = new Padding(3, 24, 3, 3),
+                Text = "保存基础配置"
+            };
+            _basicSettingsStatusLabel = new Label
+            {
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Margin = new Padding(3, 12, 3, 3),
+                Text = "关闭主界面后程序将继续在系统托盘运行。"
+            };
+
+            var layout = new FlowLayoutPanel
+            {
+                AutoScroll = true,
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                Padding = new Padding(20),
+                WrapContents = false
+            };
+            layout.Controls.Add(titleLabel);
+            layout.Controls.Add(_autoStartCheckBox);
+            layout.Controls.Add(descriptionLabel);
+            layout.Controls.Add(_basicSettingsSaveButton);
+            layout.Controls.Add(_basicSettingsStatusLabel);
+            tabPageBasicSettings.Controls.Add(layout);
+            tabControl1.SelectedTab = tabPageBasicSettings;
+
+            _autoStartCheckBox.CheckedChanged += AutoStartCheckBox_CheckedChanged;
+            _basicSettingsSaveButton.Click += BasicSettingsSaveButton_Click;
         }
 
         private void InitializeAiMappingEditor()
@@ -140,7 +202,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private void ConfigForm_Load(object sender, EventArgs e)
         {
             // 获取 DataGridView
-            _dgvPath = GetDataGridViewFromTabPage(tabControl1.TabPages[0]);
+            _dgvPath = GetDataGridViewFromTabPage(tabPage1);
 
             // 设置列自动填充
             if (_dgvPath != null)
@@ -166,7 +228,7 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void ConfigForm_Activated(object sender, EventArgs e)
         {
-            if (!_configurationLoaded || _configurationHasUnsavedEdits) return;
+            if (!_configurationLoaded || _configurationHasUnsavedEdits || _basicConfigurationHasUnsavedEdits) return;
 
             ReloadConfigurationFromStorage();
         }
@@ -192,11 +254,82 @@ namespace MachineDataAcquisitionSystem.Forms
                         SelectDatabase(selectedDatabase);
                 }
                 LoadAiMappingSettings();
+                LoadBasicSettings();
             }
             finally
             {
                 _reloadingConfiguration = false;
             }
+        }
+
+        private void LoadBasicSettings()
+        {
+            _autoStartCheckBox.Checked = _appSettings.AutoStart;
+            _basicConfigurationHasUnsavedEdits = false;
+            UpdateBasicSettingsStatus("关闭主界面后程序将继续在系统托盘运行。", Color.DimGray);
+        }
+
+        private void AutoStartCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            if (_reloadingConfiguration) return;
+
+            _basicConfigurationHasUnsavedEdits = true;
+            UpdateBasicSettingsStatus("基础配置有未保存修改。", Color.DarkOrange);
+        }
+
+        private void BasicSettingsSaveButton_Click(object sender, EventArgs e)
+        {
+            bool previousAutoStart = _appSettings.AutoStart;
+            bool requestedAutoStart = _autoStartCheckBox.Checked;
+            _basicSettingsSaveButton.Enabled = false;
+            try
+            {
+                _startupRegistrationService.SetEnabled(requestedAutoStart, Application.ExecutablePath);
+                try
+                {
+                    SettingsHelper.SaveBasicConfiguration(requestedAutoStart);
+                }
+                catch (Exception saveException)
+                {
+                    try
+                    {
+                        _startupRegistrationService.SetEnabled(previousAutoStart, Application.ExecutablePath);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        throw new InvalidOperationException(
+                            "配置文件保存失败，且开机启动状态未能恢复：" +
+                            saveException.Message + "；回滚失败：" + rollbackException.Message,
+                            saveException);
+                    }
+
+                    throw new InvalidOperationException(
+                        "配置文件保存失败，开机启动状态已恢复：" + saveException.Message,
+                        saveException);
+                }
+
+                _appSettings.AutoStart = requestedAutoStart;
+                _basicConfigurationHasUnsavedEdits = false;
+                UpdateBasicSettingsStatus("基础配置保存成功。", Color.DarkGreen);
+                MessageBox.Show(this, "基础配置已保存并立即生效。", "基础配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                _autoStartCheckBox.Checked = previousAutoStart;
+                _basicConfigurationHasUnsavedEdits = false;
+                UpdateBasicSettingsStatus("基础配置保存失败。", Color.Firebrick);
+                MessageBox.Show(this, ex.Message, "基础配置保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _basicSettingsSaveButton.Enabled = true;
+            }
+        }
+
+        private void UpdateBasicSettingsStatus(string message, Color color)
+        {
+            _basicSettingsStatusLabel.Text = message;
+            _basicSettingsStatusLabel.ForeColor = color;
         }
 
         private void PathGrid_CellValueChanged(object sender, DataGridViewCellEventArgs e)

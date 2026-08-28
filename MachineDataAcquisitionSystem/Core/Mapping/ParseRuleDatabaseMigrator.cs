@@ -1031,6 +1031,19 @@ CREATE TABLE IF NOT EXISTS ParseRuleVersions (
     CONSTRAINT CK_ParseRuleVersions_Status CHECK (Status IN (0, 1, 2, 3))
 );
 
+CREATE TABLE IF NOT EXISTS ParseRuleVersionModels (
+    ParseRuleVersionId INTEGER NOT NULL,
+    Role TEXT NOT NULL,
+    ModelId INTEGER NOT NULL,
+    ModelType TEXT NOT NULL,
+    ModelSchemaHash TEXT NOT NULL,
+    GeneratedModelCodeSnapshot TEXT NOT NULL,
+    GeneratedModelCodeSha256 TEXT NOT NULL,
+    PRIMARY KEY (ParseRuleVersionId, Role),
+    CONSTRAINT FK_ParseRuleVersionModels_Version
+        FOREIGN KEY (ParseRuleVersionId) REFERENCES ParseRuleVersions(Id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS PublishedParseRuleBindings (
     MachineId TEXT NOT NULL,
     NormalizedExtension TEXT NOT NULL,
@@ -1054,6 +1067,8 @@ CREATE TABLE IF NOT EXISTS LegacyParseRuleImports (
 
 CREATE INDEX IF NOT EXISTS IX_ParseRuleVersions_DefinitionId
     ON ParseRuleVersions(DefinitionId, VersionNumber);
+CREATE INDEX IF NOT EXISTS IX_ParseRuleVersionModels_ModelId
+    ON ParseRuleVersionModels(ModelId, ParseRuleVersionId);
 CREATE INDEX IF NOT EXISTS IX_PublishedParseRuleBindings_VersionId
     ON PublishedParseRuleBindings(ParseRuleVersionId);
 ");

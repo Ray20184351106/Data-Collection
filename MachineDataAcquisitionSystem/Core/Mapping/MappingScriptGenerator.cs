@@ -28,6 +28,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         {
             string encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(json));
 
+            if (rule.RecordMode == MappingRecordMode.MasterDetail)
+                return GenerateMasterDetail(rule, encoded);
+
             bool repeating = rule.RecordMode == MappingRecordMode.RepeatingRows;
             string contractModel = repeating ? "__mappingContractModel" : "model";
             var lines = new List<string>
@@ -63,6 +66,44 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 lines.Add("return model;");
             }
             return string.Join(Environment.NewLine, lines);
+        }
+
+        private static string GenerateMasterDetail(MappingRuleDefinition rule, string encoded)
+        {
+            MasterDetailMappingDefinition definition = rule.MasterDetail;
+            var lines = new List<string>
+            {
+                "var __mappingMasterContract = new " + definition.Master.TargetModelType + "();",
+                "var __mappingDetailContract = new " + definition.Detail.TargetModelType + "();"
+            };
+            AddContractChecks(lines, definition.Master.Fields, "__mappingMasterContract", "Master");
+            AddContractChecks(lines, definition.Detail.Fields, "__mappingDetailContract", "Detail");
+            lines.Add("long? __mappingParentCidContract = __mappingDetailContract." + definition.ParentCidField + ";");
+            lines.Add("__mappingDetailContract." + definition.ParentCidField + " = __mappingParentCidContract;");
+            lines.Add(
+                "var result = MachineDataAcquisitionSystem.Core.Mapping.MappingRuntime.CreateMasterDetail<" +
+                definition.Master.TargetModelType + ", " + definition.Detail.TargetModelType +
+                ">(\"" + encoded + "\", filePath, machineId);");
+            lines.Add("return result;");
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        private static void AddContractChecks(
+            ICollection<string> lines,
+            IList<FieldMappingRule> fields,
+            string modelVariable,
+            string prefix)
+        {
+            for (int index = 0; index < fields.Count; index++)
+            {
+                FieldMappingRule field = fields[index];
+                string csharpType = ToCSharpType(field.TargetType);
+                if (!field.IsRequired && !string.Equals(csharpType, "string", StringComparison.Ordinal))
+                    csharpType += "?";
+                string variable = "__mapping" + prefix + "Contract" + index;
+                lines.Add(csharpType + " " + variable + " = " + modelVariable + "." + field.TargetField + ";");
+                lines.Add(modelVariable + "." + field.TargetField + " = " + variable + ";");
+            }
         }
 
         private static string ToCSharpType(string targetType)

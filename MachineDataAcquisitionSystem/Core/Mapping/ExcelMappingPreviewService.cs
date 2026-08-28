@@ -55,7 +55,13 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
                     ISheet sheet = lease.Workbook.GetSheet(rule.SheetName);
                     var displayCells = sheetSnapshot.Cells.ToDictionary(cell => cell.Coordinate, StringComparer.Ordinal);
-                    if (rule.RecordMode == MappingRecordMode.RepeatingRows)
+                    if (rule.RecordMode == MappingRecordMode.MasterDetail)
+                    {
+                        ResolveFileNameFields(filePath, rule.MasterDetail, result);
+                        MappingRuleDefinition detailRule = CreateDetailPreviewRule(rule);
+                        ResolveRepeatingRows(sheet, sheetSnapshot, displayCells, detailRule, result);
+                    }
+                    else if (rule.RecordMode == MappingRecordMode.RepeatingRows)
                         ResolveRepeatingRows(sheet, sheetSnapshot, displayCells, rule, result);
                     else
                     {
@@ -63,7 +69,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                             ResolveField(sheet, displayCells, field, result);
                     }
 
-                    result.TemplateSignature = BuildTemplateSignature(rule, sheetSnapshot);
+                    result.TemplateSignature = rule.RecordMode == MappingRecordMode.MasterDetail
+                        ? BuildMasterDetailTemplateSignature(rule, sheetSnapshot)
+                        : BuildTemplateSignature(rule, sheetSnapshot);
                     if (!string.IsNullOrWhiteSpace(rule.TemplateSignature) &&
                         !string.Equals(rule.TemplateSignature, result.TemplateSignature, StringComparison.Ordinal))
                         AddError(result, "TEMPLATE_SIGNATURE_MISMATCH");
@@ -86,6 +94,113 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 AddError(result, "INVALID_WORKBOOK");
             }
             return Complete(result);
+        }
+
+        private static MappingRuleDefinition CreateDetailPreviewRule(MappingRuleDefinition rule)
+        {
+            MasterDetailMappingDefinition definition = rule.MasterDetail;
+            return new MappingRuleDefinition
+            {
+                RuleName = rule.RuleName,
+                ModelId = definition.Detail.ModelId,
+                TargetModelType = definition.Detail.TargetModelType,
+                ModelSchemaHash = definition.Detail.ModelSchemaHash,
+                NormalizedExtension = rule.NormalizedExtension,
+                SheetName = rule.SheetName,
+                RecordMode = MappingRecordMode.RepeatingRows,
+                RepeatedRows = definition.Detail.RepeatedRows,
+                Fields = definition.Detail.Fields
+            };
+        }
+
+        private static void ResolveFileNameFields(
+            string filePath,
+            MasterDetailMappingDefinition definition,
+            MappingPreviewResult result)
+        {
+            FileNameExtractionResult extracted = FileNameExtractionParser.Parse(
+                filePath,
+                definition.FileName);
+            foreach (FieldMappingRule field in definition.Master.Fields)
+            {
+                object rawValue;
+                string source;
+                switch (field.Locator.Type)
+                {
+                    case "fileNameFull":
+                        rawValue = extracted.FullName;
+                        source = "完整文件名";
+                        break;
+                    case "fileNameStem":
+                        rawValue = extracted.Stem;
+                        source = "无扩展名文件名";
+                        break;
+                    case "fileNameSegment":
+                        rawValue = extracted.Segments[field.Locator.SegmentIndex];
+                        source = "文件名片段" + (field.Locator.SegmentIndex + 1)
+                            .ToString(CultureInfo.InvariantCulture);
+                        break;
+                    default:
+                        throw new MappingValidationException("主表包含不支持的文件名定位器。");
+                }
+
+                var fieldResult = new MappingPreviewFieldResult
+                {
+                    TargetField = field.TargetField,
+                    SourceCell = source,
+                    RawValue = rawValue
+                };
+                result.Fields[field.TargetField] = fieldResult;
+                try
+                {
+                    object value = ApplyTransforms(rawValue, field);
+                    if (IsMissing(value) && field.IsRequired)
+                    {
+                        fieldResult.ErrorCode = "MISSING_REQUIRED";
+                        AddError(result, fieldResult.ErrorCode);
+                        continue;
+                    }
+                    fieldResult.Value = ConvertToTargetType(value, field.TargetType);
+                }
+                catch (FormatException)
+                {
+                    fieldResult.ErrorCode = "CONVERSION_FAILED";
+                    AddError(result, fieldResult.ErrorCode);
+                }
+                catch (OverflowException)
+                {
+                    fieldResult.ErrorCode = "CONVERSION_FAILED";
+                    AddError(result, fieldResult.ErrorCode);
+                }
+                catch (InvalidCastException)
+                {
+                    fieldResult.ErrorCode = "CONVERSION_FAILED";
+                    AddError(result, fieldResult.ErrorCode);
+                }
+            }
+        }
+
+        private static string BuildMasterDetailTemplateSignature(
+            MappingRuleDefinition rule,
+            MappingSheetSnapshot sheet)
+        {
+            MappingRuleDefinition detailRule = CreateDetailPreviewRule(rule);
+            string detailSignature = BuildTemplateSignature(detailRule, sheet);
+            IEnumerable<string> masterParts = rule.MasterDetail.Master.Fields
+                .OrderBy(field => field.TargetField, StringComparer.Ordinal)
+                .Select(field => string.Join("|", new[]
+                {
+                    field.TargetField,
+                    field.Locator.Type ?? string.Empty,
+                    field.Locator.SegmentIndex.ToString(CultureInfo.InvariantCulture)
+                }));
+            return MappingRuleSerializer.Sha256(string.Join("\n", new[]
+            {
+                "masterDetail",
+                rule.MasterDetail.FileName.ExpectedSegmentCount.ToString(CultureInfo.InvariantCulture),
+                string.Join("\n", masterParts),
+                detailSignature
+            }));
         }
 
         public MappingWorkbookSnapshot Inspect(string filePath)

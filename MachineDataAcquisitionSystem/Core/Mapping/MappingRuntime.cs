@@ -51,6 +51,56 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             return models;
         }
 
+        public static MasterDetailParseResult CreateMasterDetail<TMaster, TDetail>(
+            string encodedRule,
+            string filePath,
+            int machineId)
+            where TMaster : new()
+            where TDetail : new()
+        {
+            MappingRuleDefinition rule = DecodeRule(encodedRule);
+            MappingRuleSerializer.ValidateDefinition(rule);
+            if (rule.RecordMode != MappingRecordMode.MasterDetail)
+                throw new MappingValidationException("非主子表规则不能使用主子表运行时。");
+
+            MasterDetailMappingDefinition definition = rule.MasterDetail;
+            EnsureModelType(typeof(TMaster), definition.Master.TargetModelType);
+            EnsureModelType(typeof(TDetail), definition.Detail.TargetModelType);
+            PropertyInfo parentCid = typeof(TDetail).GetProperty(
+                definition.ParentCidField,
+                BindingFlags.Instance | BindingFlags.Public);
+            Type parentCidType = parentCid == null
+                ? null
+                : Nullable.GetUnderlyingType(parentCid.PropertyType) ?? parentCid.PropertyType;
+            if (parentCid == null || !parentCid.CanWrite || parentCidType != typeof(long))
+                throw new MappingValidationException("子模型缺少可写的 long 类型关联字段：" + definition.ParentCidField);
+
+            MappingPreviewResult preview = new ExcelMappingPreviewService().Preview(filePath, rule);
+            if (!preview.IsValid)
+                throw new MappingValidationException(BuildPreviewErrorMessage(preview));
+            if (preview.Records.Count == 0)
+                throw new MappingValidationException("主子表规则没有解析到任何子表记录。");
+
+            var master = new TMaster();
+            PopulateProperties(master, typeof(TMaster), definition.Master.Fields, preview.Fields);
+            var details = new List<object>(preview.Records.Count);
+            foreach (MappingPreviewRecordResult record in preview.Records)
+            {
+                var detail = new TDetail();
+                PopulateProperties(detail, typeof(TDetail), definition.Detail.Fields, record.Fields);
+                details.Add(detail);
+            }
+
+            return new MasterDetailParseResult(
+                master,
+                details,
+                definition.Master.ModelId,
+                definition.Master.TargetModelType,
+                definition.Detail.ModelId,
+                definition.Detail.TargetModelType,
+                definition.ParentCidField);
+        }
+
         private static string BuildPreviewErrorMessage(MappingPreviewResult preview)
         {
             var details = new List<string>();
@@ -189,6 +239,67 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             }
             return records;
         }
+
+        public static MasterDetailParseResult NormalizeMasterDetail(
+            object result,
+            string masterModelType,
+            string detailModelType)
+        {
+            var aggregate = result as MasterDetailParseResult;
+            if (aggregate == null)
+                throw new MappingValidationException("主子表规则返回了无效结果类型。");
+            if (aggregate.Master == null)
+                throw new MappingValidationException("主子表规则没有返回主表记录。");
+            EnsureType(aggregate.Master, masterModelType, "主表");
+            if (aggregate.Details == null || aggregate.Details.Count == 0)
+                throw new MappingValidationException("主子表规则没有返回任何子表记录。");
+            if (aggregate.Details.Count > MaximumRecordsPerFile)
+                throw new MappingValidationException("单个文件解析记录数超过上限。");
+            foreach (object detail in aggregate.Details)
+            {
+                if (detail == null)
+                    throw new MappingValidationException("主子表结果包含空的子表记录。");
+                EnsureType(detail, detailModelType, "子表");
+            }
+            return aggregate;
+        }
+
+        private static void EnsureType(object value, string expectedType, string label)
+        {
+            Type type = value.GetType();
+            if (!string.Equals(type.Name, expectedType, StringComparison.Ordinal) &&
+                !string.Equals(type.FullName, expectedType, StringComparison.Ordinal))
+                throw new MappingValidationException(label + "结果类型与规则关联模型不一致。");
+        }
+    }
+
+    public sealed class MasterDetailParseResult
+    {
+        public MasterDetailParseResult(
+            object master,
+            IEnumerable<object> details,
+            int masterModelId,
+            string masterModelType,
+            int detailModelId,
+            string detailModelType,
+            string parentCidField)
+        {
+            Master = master;
+            Details = (details ?? Enumerable.Empty<object>()).ToList().AsReadOnly();
+            MasterModelId = masterModelId;
+            MasterModelType = masterModelType;
+            DetailModelId = detailModelId;
+            DetailModelType = detailModelType;
+            ParentCidField = parentCidField;
+        }
+
+        public object Master { get; private set; }
+        public IReadOnlyList<object> Details { get; private set; }
+        public int MasterModelId { get; private set; }
+        public string MasterModelType { get; private set; }
+        public int DetailModelId { get; private set; }
+        public string DetailModelType { get; private set; }
+        public string ParentCidField { get; private set; }
     }
 
     public sealed class LocalMappingAssistant

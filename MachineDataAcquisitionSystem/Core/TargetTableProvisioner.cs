@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Text.RegularExpressions;
 using SqlSugar;
 
 namespace MachineDataAcquisitionSystem.Core
@@ -69,6 +70,7 @@ namespace MachineDataAcquisitionSystem.Core
                 if (!db.DbMaintenance.IsAnyTable(tableName, false))
                     throw new InvalidOperationException("自动创建目标表失败：" + tableName);
 
+                EnsureSystemIndexes(db, definition);
                 return new TargetTableProvisionResult(tableName, true);
             }
         }
@@ -85,8 +87,21 @@ namespace MachineDataAcquisitionSystem.Core
             {
                 DbColumnInfo existing;
                 if (!existingColumns.TryGetValue(configured.FieldName, out existing))
-                    throw new InvalidOperationException(
-                        "主数据库目标表缺少配置字段：" + configured.FieldName);
+                {
+                    if (!IsParentCidColumn(configured))
+                        throw new InvalidOperationException(
+                            "主数据库目标表缺少配置字段：" + configured.FieldName);
+
+                    if (!db.DbMaintenance.AddColumn(
+                        definition.TableName,
+                        CreateParentCidColumn(db, definition.TableName, configured)))
+                    {
+                        throw new InvalidOperationException(
+                            "自动增加子表关联字段失败：" + configured.FieldName);
+                    }
+                    adjusted++;
+                    continue;
+                }
 
                 bool desiredNullable = !configured.IsRequired && !configured.IsPrimaryKey;
                 if (existing.IsPrimarykey != configured.IsPrimaryKey)
@@ -125,7 +140,66 @@ namespace MachineDataAcquisitionSystem.Core
                 adjusted++;
             }
 
+            EnsureSystemIndexes(db, definition);
+
             return adjusted;
+        }
+
+        private static bool IsParentCidColumn(TargetTableColumnDefinition column)
+        {
+            return column.IsSystemGenerated &&
+                string.Equals(column.SystemRole, "ParentCid", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(column.FieldType, "long", StringComparison.OrdinalIgnoreCase) &&
+                !column.IsRequired &&
+                !column.IsPrimaryKey &&
+                !column.IsIdentity;
+        }
+
+        private static DbColumnInfo CreateParentCidColumn(
+            SqlSugarClient db,
+            string tableName,
+            TargetTableColumnDefinition column)
+        {
+            string dataType;
+            switch (db.CurrentConnectionConfig.DbType)
+            {
+                case DbType.Sqlite: dataType = "INTEGER"; break;
+                case DbType.MySql: dataType = "BIGINT"; break;
+                case DbType.PostgreSQL: dataType = "int8"; break;
+                default: dataType = "BIGINT"; break;
+            }
+
+            return new DbColumnInfo
+            {
+                TableName = tableName,
+                DbColumnName = column.FieldName,
+                PropertyName = column.FieldName,
+                PropertyType = typeof(long?),
+                DataType = dataType,
+                IsNullable = true,
+                IsIdentity = false,
+                IsPrimarykey = false,
+                ColumnDescription = column.Description ?? "主表CID"
+            };
+        }
+
+        private static void EnsureSystemIndexes(
+            SqlSugarClient db,
+            TargetTableDefinition definition)
+        {
+            foreach (TargetTableColumnDefinition column in definition.Columns.Where(IsParentCidColumn))
+            {
+                string indexName = "IX_" + definition.TableName + "_" + column.FieldName;
+                if (db.DbMaintenance.IsAnyIndex(indexName)) continue;
+                if (!db.DbMaintenance.CreateIndex(
+                    definition.TableName,
+                    new[] { column.FieldName },
+                    indexName,
+                    false))
+                {
+                    throw new InvalidOperationException("自动创建子表关联索引失败：" + indexName);
+                }
+            }
         }
     }
 
@@ -143,12 +217,32 @@ namespace MachineDataAcquisitionSystem.Core
         {
             if (string.IsNullOrWhiteSpace(TableName))
                 throw new InvalidOperationException("数据模型缺少目标表名。");
+            if (!IsSafeIdentifier(TableName))
+                throw new InvalidOperationException("目标表名不是安全的数据库标识符：" + TableName);
             if (Columns == null || Columns.Count == 0)
                 throw new InvalidOperationException("数据模型没有可用于建表的字段。");
             if (Columns.Any(column => column == null || string.IsNullOrWhiteSpace(column.FieldName)))
                 throw new InvalidOperationException("数据模型包含无效字段。");
+            if (Columns.Any(column => !IsSafeIdentifier(column.FieldName)))
+                throw new InvalidOperationException("数据模型包含不安全的字段名。");
             if (Columns.GroupBy(column => column.FieldName, StringComparer.Ordinal).Any(group => group.Count() > 1))
                 throw new InvalidOperationException("数据模型包含重复字段。");
+            if (Columns.Any(column => column.IsSystemGenerated &&
+                !string.Equals(column.SystemRole, "ParentCid", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("数据模型包含未知的系统字段角色。");
+            if (Columns.Any(column => column.IsSystemGenerated &&
+                string.Equals(column.SystemRole, "ParentCid", StringComparison.OrdinalIgnoreCase) &&
+                (!string.Equals(column.FieldType, "long", StringComparison.OrdinalIgnoreCase) ||
+                 column.IsRequired || column.IsPrimaryKey || column.IsIdentity)))
+                throw new InvalidOperationException("子表关联字段必须是可空 long，且不能是主键或自增字段。");
+        }
+
+        private static bool IsSafeIdentifier(string value)
+        {
+            return Regex.IsMatch(
+                (value ?? string.Empty).Trim(),
+                @"^[\p{L}_][\p{L}\p{Nd}_]{0,127}$",
+                RegexOptions.CultureInvariant);
         }
     }
 
@@ -161,6 +255,8 @@ namespace MachineDataAcquisitionSystem.Core
         public bool IsPrimaryKey { get; set; }
         public bool IsIdentity { get; set; }
         public string Description { get; set; }
+        public bool IsSystemGenerated { get; set; }
+        public string SystemRole { get; set; }
     }
 
     internal static class TargetTableTypeBuilder

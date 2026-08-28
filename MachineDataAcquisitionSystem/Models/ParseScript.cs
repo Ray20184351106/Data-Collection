@@ -20,6 +20,18 @@ namespace MachineDataAcquisitionSystem.Models
         public string ModelSchemaHash { get; set; }
         public ParseRuleType RuleType { get; set; }
         public string TargetModelType { get; set; }
+        public string DefinitionJson { get; set; }
+        public string GeneratedModelCodeSnapshot { get; set; }
+        public string GeneratedModelCodeSha256 { get; set; }
+        public List<ParseScriptModelSnapshot> ModelSnapshots { get; set; } =
+            new List<ParseScriptModelSnapshot>();
+    }
+
+    public sealed class ParseScriptModelSnapshot
+    {
+        public int ModelId { get; set; }
+        public string ModelType { get; set; }
+        public string ModelSchemaHash { get; set; }
         public string GeneratedModelCodeSnapshot { get; set; }
         public string GeneratedModelCodeSha256 { get; set; }
     }

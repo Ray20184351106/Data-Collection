@@ -57,6 +57,9 @@ namespace MachineDataAcquisitionSystem
         private HashSet<int> _stoppingMachines = new HashSet<int>();
         private bool _shutdownInProgress;
         private bool _shutdownCompleted;
+        private bool _exitRequested;
+        private NotifyIcon _trayIcon;
+        private ContextMenuStrip _trayContextMenu;
         private FileParser _fileParser = new FileParser();
 
         // 机台监控路径
@@ -146,6 +149,7 @@ namespace MachineDataAcquisitionSystem
 
             // Agent 不可用时不影响本地采集；远程停止复用本地的取消链路。
             InitRemoteAgentBridge();
+            InitializeTrayIcon();
 
         }
 
@@ -854,10 +858,26 @@ namespace MachineDataAcquisitionSystem
                     return;
                 }
 
-                string currentModelHash = new ModelSchemaService(DatabaseHelper.GetConnectionString())
-                    .ComputeHash(script.ModelId);
+                var runtimeSchemaService = new ModelSchemaService(DatabaseHelper.GetConnectionString());
+                string currentModelHash = runtimeSchemaService.ComputeHash(script.ModelId);
                 if (!string.Equals(currentModelHash, script.ModelSchemaHash, StringComparison.Ordinal))
                     throw new InvalidOperationException("关联模型结构已变化，当前发布规则必须重新验证后才能采集。");
+                foreach (ParseScriptModelSnapshot snapshot in script.ModelSnapshots)
+                {
+                    string snapshotCurrentHash = runtimeSchemaService.ComputeHash(snapshot.ModelId);
+                    if (!string.Equals(snapshotCurrentHash, snapshot.ModelSchemaHash, StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            "主子表关联模型结构已变化，当前发布规则必须重新验证后才能采集：" + snapshot.ModelType);
+                }
+
+                MappingRuleDefinition mappingDefinition = null;
+                bool isMasterDetail = false;
+                if (script.RuleType == ParseRuleType.Mapping &&
+                    !string.IsNullOrWhiteSpace(script.DefinitionJson))
+                {
+                    mappingDefinition = MappingRuleSerializer.Deserialize(script.DefinitionJson);
+                    isMasterDetail = mappingDefinition.RecordMode == MappingRecordMode.MasterDetail;
+                }
 
                 AddLog($"[机台{machineId}] 找到脚本: {script.Name} (模型ID: {script.ModelId})", LogLevel.Success);
                 parserVersionId = script.ParserVersionId.HasValue && script.ParserVersionId.Value > 0
@@ -867,13 +887,26 @@ namespace MachineDataAcquisitionSystem
 
                 // ========== 3. 执行脚本 ==========
                 IReadOnlyList<object> models = Array.Empty<object>();
+                MasterDetailParseResult masterDetail = null;
+                bool masterDetailCommitted = false;
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     object scriptResult = ScriptEngine.Execute(script, filePath, machineId);
                     cancellationToken.ThrowIfCancellationRequested();
-                    models = MappingResultNormalizer.Normalize(scriptResult, script.TargetModelType);
-                    recordCount = models.Count;
+                    if (isMasterDetail)
+                    {
+                        masterDetail = MappingResultNormalizer.NormalizeMasterDetail(
+                            scriptResult,
+                            mappingDefinition.MasterDetail.Master.TargetModelType,
+                            mappingDefinition.MasterDetail.Detail.TargetModelType);
+                        recordCount = masterDetail.Details.Count;
+                    }
+                    else
+                    {
+                        models = MappingResultNormalizer.Normalize(scriptResult, script.TargetModelType);
+                        recordCount = models.Count;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -903,7 +936,7 @@ namespace MachineDataAcquisitionSystem
                 UpdateQueueStatus(machineId, fileName, "处理中", 70);
 
                 // ========== 4. 保存到服务器数据库 ==========
-                if (models.Count > 0)
+                if (masterDetail != null || models.Count > 0)
                 {
                     try
                     {
@@ -911,14 +944,33 @@ namespace MachineDataAcquisitionSystem
 
                         // ========== 补全基类默认值 ==========
                         cancellationToken.ThrowIfCancellationRequested();
+                        if (masterDetail != null)
+                        {
+                            await FillDefaultValues(masterDetail.Master);
+                            foreach (object detail in masterDetail.Details)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                await FillDefaultValues(detail);
+                            }
+                            MasterDetailPersistenceResult result = await SaveMasterDetailToServerDatabase(
+                                masterDetail,
+                                cancellationToken);
+                            masterDetailCommitted = true;
+                            AddLog(
+                                $"[机台{machineId}] 主子表事务提交成功：主表 1 条、子表 {result.DetailCount} 条，主表CID={result.MasterCid}",
+                                LogLevel.Success);
+                        }
                         foreach (object model in models)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             await FillDefaultValues(model);
                         }
                         cancellationToken.ThrowIfCancellationRequested();
-                        batchItems = AddBatchGroup(machineId, script.ModelId, models, cancellationToken);
-                        AddLog($"[机台{machineId}] {batchItems.Count} 条数据已作为同一文件批次加入队列", LogLevel.Success);
+                        if (masterDetail == null)
+                        {
+                            batchItems = AddBatchGroup(machineId, script.ModelId, models, cancellationToken);
+                            AddLog($"[机台{machineId}] {batchItems.Count} 条数据已作为同一文件批次加入队列", LogLevel.Success);
+                        }
                         //if (!saveSuccess)
                         //{
                         //    AddLog($"[机台{machineId}] 保存到服务器数据库失败", LogLevel.Error);
@@ -941,12 +993,19 @@ namespace MachineDataAcquisitionSystem
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 90);
 
-                AddLog($"[机台{machineId}] 处理成功，共解析 {recordCount} 条记录", LogLevel.Success);
+                AddLog(
+                    masterDetail == null
+                        ? $"[机台{machineId}] 处理成功，共解析 {recordCount} 条记录"
+                        : $"[机台{machineId}] 处理成功，主表 1 条、子表 {recordCount} 条",
+                    LogLevel.Success);
 
                 UpdateQueueStatus(machineId, fileName, "处理中", 95);
 
-                cancellationToken.ThrowIfCancellationRequested();
-                MarkBatchGroupReady(batchItems, cancellationToken);
+                if (!masterDetailCommitted)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    MarkBatchGroupReady(batchItems, cancellationToken);
+                }
                 try
                 {
                     if (_fileWatchers.ContainsKey(machineId))
@@ -1085,6 +1144,94 @@ namespace MachineDataAcquisitionSystem
             catch (Exception ex)
             {
                 AddLog($"补全默认值失败: {ex.Message}", LogLevel.Error);
+            }
+        }
+
+        private void InitializeTrayIcon()
+        {
+            components = TrayComponentContainer.Ensure(components);
+            _trayContextMenu = new ContextMenuStrip(components);
+            var openMainWindowItem = new ToolStripMenuItem("打开主界面");
+            var exitApplicationItem = new ToolStripMenuItem("退出程序");
+            openMainWindowItem.Click += (sender, args) => RestoreMainWindowFromTray();
+            exitApplicationItem.Click += (sender, args) => RequestApplicationExit();
+            _trayContextMenu.Items.Add(openMainWindowItem);
+            _trayContextMenu.Items.Add(new ToolStripSeparator());
+            _trayContextMenu.Items.Add(exitApplicationItem);
+
+            _trayIcon = new NotifyIcon(components)
+            {
+                ContextMenuStrip = _trayContextMenu,
+                Icon = Icon ?? SystemIcons.Application,
+                Text = "产线数据采集系统",
+                Visible = true
+            };
+            _trayIcon.MouseClick += TrayIcon_MouseClick;
+        }
+
+        private void TrayIcon_MouseClick(object sender, MouseEventArgs e)
+        {
+            if (e.Button == MouseButtons.Left)
+                RestoreMainWindowFromTray();
+        }
+
+        private void RestoreMainWindowFromTray()
+        {
+            if (_shutdownInProgress || _shutdownCompleted) return;
+
+            ShowInTaskbar = true;
+            Show();
+            if (WindowState == FormWindowState.Minimized)
+                WindowState = FormWindowState.Normal;
+            BringToFront();
+            Activate();
+        }
+
+        private void HideMainWindowToTray()
+        {
+            Hide();
+            ShowInTaskbar = false;
+        }
+
+        private void RequestApplicationExit()
+        {
+            if (_shutdownInProgress || _shutdownCompleted) return;
+
+            _exitRequested = true;
+            Close();
+        }
+
+        private async Task<MasterDetailPersistenceResult> SaveMasterDetailToServerDatabase(
+            MasterDetailParseResult aggregate,
+            CancellationToken cancellationToken)
+        {
+            var settings = SettingsHelper.LoadSettings();
+            var primaryDb = settings.Databases?.FirstOrDefault(database => database.IsPrimary);
+            if (primaryDb == null)
+                throw new InvalidOperationException("未配置主数据库。");
+
+            string connectionString = primaryDb.GetConnectionString();
+            if (string.IsNullOrWhiteSpace(connectionString))
+                throw new InvalidOperationException("主数据库连接字符串为空。");
+
+            var schemaLoader = new TargetTableSchemaLoader(DatabaseHelper.GetConnectionString());
+            TargetTableDefinition masterDefinition = schemaLoader.Load(aggregate.MasterModelId);
+            TargetTableDefinition detailDefinition = schemaLoader.Load(aggregate.DetailModelId);
+
+            using (var db = new SqlSugarClient(new ConnectionConfig
+            {
+                ConnectionString = connectionString,
+                DbType = GetDbType(primaryDb.DbType),
+                IsAutoCloseConnection = true
+            }))
+            {
+                return await new MasterDetailPersistenceService().PersistAsync(
+                    db,
+                    aggregate,
+                    masterDefinition,
+                    detailDefinition,
+                    () => YitIdHelper.NextId(),
+                    cancellationToken);
             }
         }
 
@@ -2135,6 +2282,13 @@ VALUES
                 return;
             }
 
+            if (TrayClosePolicy.ShouldHide(e.CloseReason, _exitRequested))
+            {
+                e.Cancel = true;
+                HideMainWindowToTray();
+                return;
+            }
+
             e.Cancel = true;
             if (_shutdownInProgress) return;
 
@@ -2164,6 +2318,8 @@ VALUES
             {
                 _shutdownCompleted = true;
                 _shutdownInProgress = false;
+                if (_trayIcon != null)
+                    _trayIcon.Visible = false;
                 Close();
             }
         }

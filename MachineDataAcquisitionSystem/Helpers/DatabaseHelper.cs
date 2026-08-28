@@ -66,7 +66,9 @@ namespace MachineDataAcquisitionSystem.Helpers
                         IsRequired INTEGER DEFAULT 0,
                         IsPrimaryKey INTEGER DEFAULT 0,
                         IsIdentity INTEGER DEFAULT 0,
-                        Description TEXT
+                        Description TEXT,
+                        IsSystemGenerated INTEGER DEFAULT 0,
+                        SystemRole TEXT
                     );
 
                     -- 机台配置表
@@ -137,6 +139,9 @@ namespace MachineDataAcquisitionSystem.Helpers
                     cmd.ExecuteNonQuery();
                 }
 
+                EnsureColumn(conn, transaction, "ModelFields", "IsSystemGenerated", "INTEGER DEFAULT 0");
+                EnsureColumn(conn, transaction, "ModelFields", "SystemRole", "TEXT");
+
                 // 插入默认基类字段
                 InsertDefaultBaseFields(conn, transaction);
                 transaction.Commit();
@@ -177,6 +182,36 @@ namespace MachineDataAcquisitionSystem.Helpers
             {
                 cmd.Transaction = transaction;
                 cmd.ExecuteNonQuery();
+            }
+        }
+
+        private static void EnsureColumn(
+            SQLiteConnection connection,
+            SQLiteTransaction transaction,
+            string tableName,
+            string columnName,
+            string definition)
+        {
+            bool exists = false;
+            using (var command = new SQLiteCommand("PRAGMA table_info(" + tableName + ");", connection, transaction))
+            using (SQLiteDataReader reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        exists = true;
+                        break;
+                    }
+                }
+            }
+            if (exists) return;
+            using (var command = new SQLiteCommand(
+                "ALTER TABLE " + tableName + " ADD COLUMN " + columnName + " " + definition + ";",
+                connection,
+                transaction))
+            {
+                command.ExecuteNonQuery();
             }
         }
 

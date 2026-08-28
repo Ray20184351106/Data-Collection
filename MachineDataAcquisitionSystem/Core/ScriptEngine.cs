@@ -1,8 +1,10 @@
 ﻿using System;
 using System.CodeDom.Compiler;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -20,7 +22,7 @@ namespace MachineDataAcquisitionSystem.Core
 {
     public static class ScriptEngine
     {
-        public const string EngineAbiVersion = "1";
+        public const string EngineAbiVersion = "2";
 
         private static readonly ConcurrentDictionary<string, Lazy<CompiledScriptExecutor>> ScriptCache =
             new ConcurrentDictionary<string, Lazy<CompiledScriptExecutor>>(StringComparer.Ordinal);
@@ -57,13 +59,7 @@ namespace MachineDataAcquisitionSystem.Core
             {
                 throw new InvalidOperationException("The published parse-rule cache metadata is incomplete.");
             }
-            if (string.IsNullOrWhiteSpace(script.GeneratedModelCodeSnapshot) ||
-                string.IsNullOrWhiteSpace(script.GeneratedModelCodeSha256) ||
-                !string.Equals(
-                    MappingRuleSerializer.Sha256(script.GeneratedModelCodeSnapshot),
-                    script.GeneratedModelCodeSha256,
-                    StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The generated model source snapshot is missing or invalid.");
+            IReadOnlyList<ParseScriptModelSnapshot> snapshots = ValidateModelSnapshots(script);
             if (!Enum.IsDefined(
                 typeof(MachineDataAcquisitionSystem.Core.Mapping.ParseRuleType),
                 script.RuleType))
@@ -74,11 +70,18 @@ namespace MachineDataAcquisitionSystem.Core
             string cacheKey = BuildCacheKey(script);
             string versionedScriptCode = script.ScriptCode;
             int versionedModelId = script.ModelId;
-            string versionedModelCode = script.GeneratedModelCodeSnapshot;
+            string versionedModelCode = snapshots.Count > 0
+                ? string.Join(Environment.NewLine, snapshots.Select(item => item.GeneratedModelCodeSnapshot))
+                : script.GeneratedModelCodeSnapshot;
+            bool sourcesAreMapped = snapshots.Count > 0;
             Lazy<CompiledScriptExecutor> lazyExecutor = ScriptCache.GetOrAdd(
                 cacheKey,
                 _ => new Lazy<CompiledScriptExecutor>(
-                    () => Compile(versionedScriptCode, versionedModelId, versionedModelCode),
+                    () => Compile(
+                        versionedScriptCode,
+                        versionedModelId,
+                        versionedModelCode,
+                        sourcesAreMapped),
                     LazyThreadSafetyMode.ExecutionAndPublication));
 
             CompiledScriptExecutor executor;
@@ -106,17 +109,42 @@ namespace MachineDataAcquisitionSystem.Core
             Compile(scriptCode, modelId, null);
         }
 
+        public static void ValidateCompilation(
+            string scriptCode,
+            IEnumerable<MappingTargetDefinition> targets)
+        {
+            if (targets == null) throw new ArgumentNullException(nameof(targets));
+            MappingTargetDefinition[] targetArray = targets.ToArray();
+            if (targetArray.Length == 0)
+                throw new ArgumentException("At least one model target is required.", nameof(targets));
+            if (targetArray.Any(target => target == null || target.ModelId <= 0 ||
+                string.IsNullOrWhiteSpace(target.TargetModelType)))
+                throw new ArgumentException("Model target metadata is incomplete.", nameof(targets));
+            if (targetArray.Select(target => target.ModelId).Distinct().Count() != targetArray.Length)
+                throw new ArgumentException("Model targets must be unique.", nameof(targets));
+
+            ValidateExecutionInput(scriptCode, targetArray[0].ModelId);
+            string modelSources = string.Join(
+                Environment.NewLine,
+                targetArray.Select(target => CaptureConfiguredModelCode(
+                    target.ModelId,
+                    target.TargetModelType)));
+            Compile(scriptCode, targetArray[0].ModelId, modelSources, true);
+        }
+
         private static CompiledScriptExecutor Compile(
             string scriptCode,
             int modelId,
-            string generatedModelCodeSnapshot)
+            string generatedModelCodeSnapshot,
+            bool snapshotAlreadyMapped = false)
         {
             System.Diagnostics.Debug.WriteLine(
                 string.Format(CultureInfo.InvariantCulture, "Compiling parse script for model {0}.", modelId));
 
             // 读取 GeneratedModels 文件夹中的所有 .cs 文件
             string generatedModelsCode = generatedModelCodeSnapshot ?? GetGeneratedModelsCode(modelId);
-            generatedModelsCode = ApplyConfiguredTableMapping(modelId, generatedModelsCode);
+            if (!snapshotAlreadyMapped)
+                generatedModelsCode = ApplyConfiguredTableMapping(modelId, generatedModelsCode);
 
             // 构建完整类代码
             string fullCode = $@"
@@ -275,6 +303,16 @@ namespace MachineDataAcquisitionSystem.Core
 
         private static string BuildCacheKey(ParseScript script)
         {
+            string modelFingerprint = script.ModelSnapshots != null && script.ModelSnapshots.Count > 0
+                ? string.Join(",", script.ModelSnapshots
+                    .OrderBy(item => item.ModelId)
+                    .Select(item => string.Join(":", new[]
+                    {
+                        item.ModelId.ToString(CultureInfo.InvariantCulture),
+                        item.ModelSchemaHash ?? string.Empty,
+                        item.GeneratedModelCodeSha256 ?? string.Empty
+                    })))
+                : script.GeneratedModelCodeSha256;
             return string.Concat(
                 script.ParserVersionId.Value.ToString(CultureInfo.InvariantCulture),
                 "|",
@@ -284,7 +322,45 @@ namespace MachineDataAcquisitionSystem.Core
                 "|",
                 EngineAbiVersion,
                 "|",
-                script.GeneratedModelCodeSha256);
+                modelFingerprint);
+        }
+
+        private static IReadOnlyList<ParseScriptModelSnapshot> ValidateModelSnapshots(ParseScript script)
+        {
+            if (script.ModelSnapshots != null && script.ModelSnapshots.Count > 0)
+            {
+                var ids = new HashSet<int>();
+                var types = new HashSet<string>(StringComparer.Ordinal);
+                foreach (ParseScriptModelSnapshot snapshot in script.ModelSnapshots)
+                {
+                    if (snapshot == null || snapshot.ModelId <= 0 ||
+                        !MappingRuleSerializer.IsIdentifier(snapshot.ModelType) ||
+                        string.IsNullOrWhiteSpace(snapshot.ModelSchemaHash) ||
+                        string.IsNullOrWhiteSpace(snapshot.GeneratedModelCodeSnapshot) ||
+                        string.IsNullOrWhiteSpace(snapshot.GeneratedModelCodeSha256) ||
+                        !ids.Add(snapshot.ModelId) || !types.Add(snapshot.ModelType) ||
+                        !string.Equals(
+                            MappingRuleSerializer.Sha256(snapshot.GeneratedModelCodeSnapshot),
+                            snapshot.GeneratedModelCodeSha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException("The generated model source snapshots are missing or invalid.");
+                }
+                if (!script.ModelSnapshots.Any(item =>
+                    item.ModelId == script.ModelId &&
+                    string.Equals(item.ModelType, script.TargetModelType, StringComparison.Ordinal) &&
+                    string.Equals(item.ModelSchemaHash, script.ModelSchemaHash, StringComparison.Ordinal)))
+                    throw new InvalidOperationException("The primary generated model snapshot does not match the parse rule.");
+                return script.ModelSnapshots;
+            }
+
+            if (string.IsNullOrWhiteSpace(script.GeneratedModelCodeSnapshot) ||
+                string.IsNullOrWhiteSpace(script.GeneratedModelCodeSha256) ||
+                !string.Equals(
+                    MappingRuleSerializer.Sha256(script.GeneratedModelCodeSnapshot),
+                    script.GeneratedModelCodeSha256,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("The generated model source snapshot is missing or invalid.");
+            return Array.Empty<ParseScriptModelSnapshot>();
         }
 
         private static void ValidateExecutionInput(string scriptCode, int modelId)
@@ -412,6 +488,12 @@ namespace MachineDataAcquisitionSystem.Core
             if (string.IsNullOrWhiteSpace(classCode))
                 throw new InvalidOperationException("The generated model class could not be extracted.");
             return classCode;
+        }
+
+        public static string CaptureConfiguredModelCode(int modelId, string modelName)
+        {
+            if (modelId <= 0) throw new ArgumentOutOfRangeException(nameof(modelId));
+            return ApplyConfiguredTableMapping(modelId, CaptureGeneratedModelCode(modelName));
         }
 
         /// <summary>

@@ -933,7 +933,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 using (var conn = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
                 {
                     conn.Open();
-                    string sql = "SELECT FieldName, FieldType, FieldLength, IsRequired, IsPrimaryKey, IsIdentity, Description FROM ModelFields WHERE ModelId = @ModelId ORDER BY Id";
+                    string sql = "SELECT FieldName, FieldType, FieldLength, IsRequired, IsPrimaryKey, IsIdentity, Description, IsSystemGenerated, SystemRole FROM ModelFields WHERE ModelId = @ModelId ORDER BY Id";
 
                     using (var cmd = new SQLiteCommand(sql, conn))
                     {
@@ -950,6 +950,11 @@ namespace MachineDataAcquisitionSystem.Forms
                                 dgvFields.Rows[rowIndex].Cells["colIsPrimaryKey"].Value = reader.GetInt32(4) == 1;
                                 dgvFields.Rows[rowIndex].Cells["colIsIdentity"].Value = reader.GetInt32(5) == 1;
                                 dgvFields.Rows[rowIndex].Cells["colDescription"].Value = reader.IsDBNull(6) ? "" : reader.GetString(6);
+                                dgvFields.Rows[rowIndex].Tag = new SystemFieldMetadata
+                                {
+                                    IsSystemGenerated = !reader.IsDBNull(7) && reader.GetInt32(7) != 0,
+                                    SystemRole = reader.IsDBNull(8) ? null : reader.GetString(8)
+                                };
                             }
                         }
                     }
@@ -1004,6 +1009,33 @@ namespace MachineDataAcquisitionSystem.Forms
                 MessageBox.Show("请输入表名", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            string normalizedModelName = txtModelName.Text.Trim();
+            string normalizedTableName = txtTableName.Text.Trim();
+            if (!MappingRuleSerializer.IsIdentifier(normalizedModelName))
+            {
+                MessageBox.Show("模型名称必须是合法的 C# 标识符", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!MappingRuleSerializer.IsIdentifier(normalizedTableName) || normalizedTableName.Length > 128)
+            {
+                MessageBox.Show("物理表名必须是长度不超过 128 的安全数据库标识符", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            using (var duplicateConnection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+            using (var duplicateCommand = duplicateConnection.CreateCommand())
+            {
+                duplicateConnection.Open();
+                duplicateCommand.CommandText = @"
+SELECT COUNT(1) FROM DataModels
+WHERE LOWER(TRIM(TableName))=LOWER(@TableName) AND Id<>@ModelId;";
+                duplicateCommand.Parameters.Add("@TableName", System.Data.DbType.String).Value = normalizedTableName;
+                duplicateCommand.Parameters.Add("@ModelId", System.Data.DbType.Int32).Value = _currentModelId;
+                if (Convert.ToInt32(duplicateCommand.ExecuteScalar()) > 0)
+                {
+                    MessageBox.Show("物理表名已被其他数据模型使用，不能重复", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
 
             // 更新当前模型数据
             if (_currentModel == null)
@@ -1011,8 +1043,8 @@ namespace MachineDataAcquisitionSystem.Forms
                 _currentModel = new ModelConfig();
             }
 
-            _currentModel.ModelName = txtModelName.Text;
-            _currentModel.TableName = txtTableName.Text;
+            _currentModel.ModelName = normalizedModelName;
+            _currentModel.TableName = normalizedTableName;
             _currentModel.Description = txtDescription.Text;
             _currentModel.IsActive = chkIsActive.Checked;
 
@@ -1086,10 +1118,14 @@ namespace MachineDataAcquisitionSystem.Forms
                         schemaService.LoadModelName(conn, transaction, _currentModelId),
                         _currentModel.ModelName,
                         StringComparison.Ordinal);
+                    bool publishedTableNameChanged = hasPublishedRule && !string.Equals(
+                        schemaService.LoadTableName(conn, transaction, _currentModelId),
+                        _currentModel.TableName,
+                        StringComparison.Ordinal);
                     bool publishedSchemaChanged = hasPublishedRule && ModelSchemaService.HasDestructiveChange(
                         schemaService.LoadFields(conn, transaction, _currentModelId),
                         proposedSchema);
-                    if (publishedModelNameChanged || publishedSchemaChanged)
+                    if (publishedModelNameChanged || publishedTableNameChanged || publishedSchemaChanged)
                     {
                         throw new PublishedModelSchemaChangeException(
                             "该模型存在已发布解析规则，不能直接修改模型名或任何会改变结构哈希的字段。请先新建模型并完成替代规则验证与切换。");
@@ -1153,8 +1189,8 @@ namespace MachineDataAcquisitionSystem.Forms
                         string fieldName = row.Cells["colFieldName"].Value?.ToString();
                         if (string.IsNullOrEmpty(fieldName)) continue;
 
-                        string sql = @"INSERT INTO ModelFields (ModelId, FieldName, FieldType, FieldLength, IsRequired, IsPrimaryKey, IsIdentity, Description)
-                       VALUES (@ModelId, @FieldName, @FieldType, @FieldLength, @IsRequired, @IsPrimaryKey, @IsIdentity, @Description)";
+                        string sql = @"INSERT INTO ModelFields (ModelId, FieldName, FieldType, FieldLength, IsRequired, IsPrimaryKey, IsIdentity, Description, IsSystemGenerated, SystemRole)
+                       VALUES (@ModelId, @FieldName, @FieldType, @FieldLength, @IsRequired, @IsPrimaryKey, @IsIdentity, @Description, @IsSystemGenerated, @SystemRole)";
 
                         using (var cmd = new SQLiteCommand(sql, conn))
                         {
@@ -1167,6 +1203,11 @@ namespace MachineDataAcquisitionSystem.Forms
                             cmd.Parameters.AddWithValue("@IsPrimaryKey", Convert.ToBoolean(row.Cells["colIsPrimaryKey"].Value ?? false) ? 1 : 0);
                             cmd.Parameters.AddWithValue("@IsIdentity", Convert.ToBoolean(row.Cells["colIsIdentity"].Value ?? false) ? 1 : 0);
                             cmd.Parameters.AddWithValue("@Description", row.Cells["colDescription"].Value?.ToString() ?? "");
+                            var systemField = row.Tag as SystemFieldMetadata;
+                            cmd.Parameters.AddWithValue("@IsSystemGenerated", systemField != null && systemField.IsSystemGenerated ? 1 : 0);
+                            cmd.Parameters.AddWithValue("@SystemRole", systemField == null || string.IsNullOrWhiteSpace(systemField.SystemRole)
+                                ? (object)DBNull.Value
+                                : systemField.SystemRole);
                             cmd.ExecuteNonQuery();
                         }
                     }
@@ -1860,6 +1901,12 @@ namespace MachineDataAcquisitionSystem.Forms
         public bool IsPrimaryKey { get; set; }
         public bool IsIdentity { get; set; }
         public string Description { get; set; }
+    }
+
+    internal sealed class SystemFieldMetadata
+    {
+        public bool IsSystemGenerated { get; set; }
+        public string SystemRole { get; set; }
     }
 
     // 模型下拉框项

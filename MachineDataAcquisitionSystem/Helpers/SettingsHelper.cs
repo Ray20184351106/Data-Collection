@@ -132,6 +132,28 @@ namespace MachineDataAcquisitionSystem.Helpers
                 CopyAiMapping(config, _settings.AiMapping ?? (_settings.AiMapping = new AiMappingConfig()));
         }
 
+        /// <summary>
+        /// 只保存基础配置，避免覆盖配置窗口中其他尚未提交的编辑。
+        /// </summary>
+        public static void SaveBasicConfiguration(bool autoStart)
+        {
+            JObject document;
+            if (File.Exists(SettingsPath))
+            {
+                document = JObject.Parse(File.ReadAllText(SettingsPath));
+            }
+            else
+            {
+                document = JObject.FromObject(new AppSettings());
+            }
+
+            document["AutoStart"] = autoStart;
+            File.WriteAllText(SettingsPath, document.ToString(Formatting.Indented));
+
+            if (_settings != null)
+                _settings.AutoStart = autoStart;
+        }
+
         public static void SaveSettingsOrThrow(AppSettings settings)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));

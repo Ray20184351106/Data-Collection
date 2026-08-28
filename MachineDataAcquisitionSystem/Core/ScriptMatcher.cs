@@ -52,6 +52,7 @@ WHERE b.MachineId = @MachineId
                             machineId.ToString(CultureInfo.InvariantCulture);
                         command.Parameters.Add("@NormalizedExtension", DbType.String).Value = extension;
 
+                        ParseScript script;
                         using (var reader = command.ExecuteReader())
                         {
                             if (!reader.Read())
@@ -59,15 +60,17 @@ WHERE b.MachineId = @MachineId
                                 return null;
                             }
 
-                            ParseScript script = ReadPublishedScript(reader, extension);
+                            script = ReadPublishedScript(reader, extension);
                             if (reader.Read())
                             {
                                 throw new InvalidOperationException(
                                     "More than one published parse-rule binding exists for the same machine and extension.");
                             }
-
-                            return script;
                         }
+                        LoadStoredModelSnapshots(connection, script);
+                        return script.ModelSnapshots.Count > 0
+                            ? script
+                            : CaptureModelSourceSnapshot(script);
                     }
                 }
             }
@@ -165,9 +168,50 @@ WHERE b.MachineId = @MachineId
                 ContentSha256 = contentSha256,
                 ModelSchemaHash = modelSchemaHash,
                 RuleType = (ParseRuleType)ruleTypeValue,
-                TargetModelType = targetModelType
+                TargetModelType = targetModelType,
+                DefinitionJson = definitionJson
             };
-            return CaptureModelSourceSnapshot(result);
+            return result;
+        }
+
+        private static void LoadStoredModelSnapshots(SQLiteConnection connection, ParseScript script)
+        {
+            using (SQLiteCommand tableCommand = connection.CreateCommand())
+            {
+                tableCommand.CommandText = @"
+SELECT COUNT(1) FROM sqlite_master
+WHERE type='table' AND name='ParseRuleVersionModels';";
+                if (Convert.ToInt32(tableCommand.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
+                    return;
+            }
+
+            using (SQLiteCommand command = connection.CreateCommand())
+            {
+                command.CommandText = @"
+SELECT ModelId,ModelType,ModelSchemaHash,GeneratedModelCodeSnapshot,GeneratedModelCodeSha256
+FROM ParseRuleVersionModels
+WHERE ParseRuleVersionId=@VersionId
+ORDER BY CASE Role WHEN 'Master' THEN 0 WHEN 'Detail' THEN 1 ELSE 2 END, Role;";
+                command.Parameters.Add("@VersionId", DbType.Int64).Value = script.ParserVersionId.Value;
+                using (SQLiteDataReader reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        script.ModelSnapshots.Add(new ParseScriptModelSnapshot
+                        {
+                            ModelId = reader.GetInt32(0),
+                            ModelType = reader.GetString(1),
+                            ModelSchemaHash = reader.GetString(2),
+                            GeneratedModelCodeSnapshot = reader.GetString(3),
+                            GeneratedModelCodeSha256 = reader.GetString(4)
+                        });
+                    }
+                }
+            }
+            if (script.ModelSnapshots.Count == 0) return;
+            ParseScriptModelSnapshot primary = script.ModelSnapshots[0];
+            script.GeneratedModelCodeSnapshot = primary.GeneratedModelCodeSnapshot;
+            script.GeneratedModelCodeSha256 = primary.GeneratedModelCodeSha256;
         }
 
         public static ParseScript CaptureModelSourceSnapshot(ParseScript script)
@@ -178,9 +222,45 @@ WHERE b.MachineId = @MachineId
             }
             if (script.ParserVersionId.HasValue && script.ParserVersionId.Value > 0)
             {
-                string source = ScriptEngine.CaptureGeneratedModelCode(script.TargetModelType);
-                script.GeneratedModelCodeSnapshot = source;
-                script.GeneratedModelCodeSha256 = MappingRuleSerializer.Sha256(source);
+                var targets = new System.Collections.Generic.List<MappingTargetDefinition>
+                {
+                    new MappingTargetDefinition
+                    {
+                        ModelId = script.ModelId,
+                        TargetModelType = script.TargetModelType,
+                        ModelSchemaHash = script.ModelSchemaHash
+                    }
+                };
+                if (script.RuleType == ParseRuleType.Mapping &&
+                    !string.IsNullOrWhiteSpace(script.DefinitionJson))
+                {
+                    MappingRuleDefinition definition = MappingRuleSerializer.Deserialize(script.DefinitionJson);
+                    if (definition.RecordMode == MappingRecordMode.MasterDetail)
+                    {
+                        targets.Clear();
+                        targets.Add(definition.MasterDetail.Master);
+                        targets.Add(definition.MasterDetail.Detail);
+                    }
+                }
+
+                script.ModelSnapshots = new System.Collections.Generic.List<ParseScriptModelSnapshot>();
+                foreach (MappingTargetDefinition target in targets)
+                {
+                    string source = ScriptEngine.CaptureConfiguredModelCode(
+                        target.ModelId,
+                        target.TargetModelType);
+                    script.ModelSnapshots.Add(new ParseScriptModelSnapshot
+                    {
+                        ModelId = target.ModelId,
+                        ModelType = target.TargetModelType,
+                        ModelSchemaHash = target.ModelSchemaHash,
+                        GeneratedModelCodeSnapshot = source,
+                        GeneratedModelCodeSha256 = MappingRuleSerializer.Sha256(source)
+                    });
+                }
+                ParseScriptModelSnapshot primary = script.ModelSnapshots[0];
+                script.GeneratedModelCodeSnapshot = primary.GeneratedModelCodeSnapshot;
+                script.GeneratedModelCodeSha256 = primary.GeneratedModelCodeSha256;
             }
             return script;
         }

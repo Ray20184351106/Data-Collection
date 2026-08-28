@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 using MachineDataAcquisitionSystem.Forms;
+using MachineDataAcquisitionSystem.Core.Mapping;
 using Xunit;
 
 namespace MachineDataAcquisitionSystem.Tests.Mapping
@@ -171,6 +172,66 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             Assert.Equal("SecondConfiguredField", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 1));
             Assert.Equal("ThirdConfiguredField", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 2));
             Assert.Equal("（忽略）", InvokeDefaultTarget(method, modelFieldsInConfiguredOrder, 3));
+        }
+
+        [Fact]
+        public void Filename_locator_built_by_editor_does_not_keep_worksheet_offsets()
+        {
+            MappingLocator locator = null;
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new ModelConfigForm())
+                    {
+                        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                        var grid = Assert.IsType<DataGridView>(
+                            typeof(ModelConfigForm).GetField("dataGridView1", Flags).GetValue(form));
+                        int rowIndex = grid.Rows.Add();
+                        DataGridViewRow row = grid.Rows[rowIndex];
+                        row.Cells["MappingTargetField"].Value = "FileName";
+                        row.Cells["MappingTargetType"].Value = "string";
+                        row.Cells["MappingRequired"].Value = true;
+                        row.Cells["MappingDescription"].Value = "file";
+                        row.Cells["MappingScope"].Value = "公共字段";
+                        row.Cells["MappingLocatorType"].Value = "fileNameFull";
+                        row.Cells["MappingLocatorValue"].Value = string.Empty;
+                        row.Cells["MappingRowOffset"].Value = "7";
+                        row.Cells["MappingColumnOffset"].Value = "1";
+                        row.Cells["MappingValueColumn"].Value = "B";
+                        row.Cells["MappingDataRowOffset"].Value = "1";
+                        row.Cells["MappingTransforms"].Value = string.Empty;
+                        row.Cells["MappingValueMap"].Value = string.Empty;
+                        row.Cells["MappingDefaultValue"].Value = string.Empty;
+
+                        MethodInfo method = typeof(ModelConfigForm).GetMethod(
+                            "CreateMappingFieldRule",
+                            Flags);
+                        Assert.NotNull(method);
+                        var field = Assert.IsType<FieldMappingRule>(method.Invoke(form, new object[] { row }));
+                        locator = field.Locator;
+                    }
+                }
+                catch (TargetInvocationException ex)
+                {
+                    failure = ex.InnerException ?? ex;
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.Null(failure);
+            Assert.NotNull(locator);
+            Assert.Equal(0, locator.RowOffset);
+            Assert.Equal(0, locator.ColumnOffset);
+            Assert.Equal(0, locator.DataRowOffset);
+            Assert.True(string.IsNullOrEmpty(locator.ValueColumn));
         }
 
         private static Point InvokeDirection(MethodInfo method, Point pointer, Rectangle viewport)

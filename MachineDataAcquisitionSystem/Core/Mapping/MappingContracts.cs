@@ -21,12 +21,46 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public MappingRecordMode RecordMode { get; set; }
         public RepeatedRowDefinition RepeatedRows { get; set; }
         public List<FieldMappingRule> Fields { get; set; }
+        public MasterDetailMappingDefinition MasterDetail { get; set; }
     }
 
     public enum MappingRecordMode
     {
         SingleRecord = 0,
-        RepeatingRows = 1
+        RepeatingRows = 1,
+        MasterDetail = 2
+    }
+
+    public sealed class MasterDetailMappingDefinition
+    {
+        public MasterDetailMappingDefinition()
+        {
+            ParentCidField = "PARENT_CID";
+        }
+
+        public MappingTargetDefinition Master { get; set; }
+        public MappingTargetDefinition Detail { get; set; }
+        public FileNameExtractionDefinition FileName { get; set; }
+        public string ParentCidField { get; set; }
+    }
+
+    public sealed class MappingTargetDefinition
+    {
+        public MappingTargetDefinition()
+        {
+            Fields = new List<FieldMappingRule>();
+        }
+
+        public int ModelId { get; set; }
+        public string TargetModelType { get; set; }
+        public string ModelSchemaHash { get; set; }
+        public RepeatedRowDefinition RepeatedRows { get; set; }
+        public List<FieldMappingRule> Fields { get; set; }
+    }
+
+    public sealed class FileNameExtractionDefinition
+    {
+        public int ExpectedSegmentCount { get; set; }
     }
 
     public enum MappingFieldScope
@@ -83,6 +117,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public int ColumnOffset { get; set; }
         public string ValueColumn { get; set; }
         public int DataRowOffset { get; set; }
+        public int SegmentIndex { get; set; }
     }
 
     public enum MappingConfirmationState

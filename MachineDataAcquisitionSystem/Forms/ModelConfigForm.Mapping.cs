@@ -23,6 +23,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private const string MappingTargetTypeColumn = "MappingTargetType";
         private const string MappingRequiredColumn = "MappingRequired";
         private const string MappingDescriptionColumn = "MappingDescription";
+        private const string MappingRoleColumn = "MappingRole";
         private const string MappingScopeColumn = "MappingScope";
         private const string MappingKeyColumn = "MappingKey";
         private const string MappingLocatorTypeColumn = "MappingLocatorType";
@@ -53,6 +54,10 @@ namespace MachineDataAcquisitionSystem.Forms
         private int _mappingSelectedListIndex = -1;
 
         private ComboBox _mappingModelCombo;
+        private ComboBox _mappingDetailModelCombo;
+        private TextBox _mappingParentCidTextBox;
+        private Button _mappingNewMasterModelButton;
+        private Label _mappingFileNameInfoLabel;
         private ComboBox _mappingSheetCombo;
         private TextBox _mappingRuleNameTextBox;
         private TextBox _mappingSamplePathTextBox;
@@ -105,7 +110,7 @@ namespace MachineDataAcquisitionSystem.Forms
             splitContainer3.Panel2.SuspendLayout();
             try
             {
-                panel2.Height = 176;
+                panel2.Height = 234;
                 panel3.Height = 62;
                 btnNewMappingScript.Text = "+ 新建映射";
 
@@ -140,7 +145,7 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 8,
-                RowCount = 4,
+                RowCount = 5,
                 Padding = new Padding(6, 4, 6, 2)
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -155,11 +160,35 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
 
             _mappingModelCombo = new ComboBox
             {
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _mappingDetailModelCombo = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _mappingParentCidTextBox = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Text = "PARENT_CID"
+            };
+            _mappingNewMasterModelButton = new Button
+            {
+                Dock = DockStyle.Fill,
+                Text = "新建主模型"
+            };
+            _mappingFileNameInfoLabel = new Label
+            {
+                Dock = DockStyle.Fill,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.DimGray,
+                Text = "文件名：未加载样本"
             };
             _mappingRuleNameTextBox = new TextBox { Dock = DockStyle.Fill };
             _mappingStatusLabel = new Label
@@ -200,6 +229,7 @@ namespace MachineDataAcquisitionSystem.Forms
             };
             _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.SingleRecord, "单条记录"));
             _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.RepeatingRows, "重复行表格"));
+            _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.MasterDetail, "主表 + 子表"));
             _mappingModeCombo.SelectedIndex = 0;
             _mappingLocalAssistButton = new Button
             {
@@ -278,6 +308,14 @@ namespace MachineDataAcquisitionSystem.Forms
                 WrapContents = true,
                 Margin = new Padding(0)
             };
+            layout.Controls.Add(CreateMappingLabel("子模型："), 0, 4);
+            layout.Controls.Add(_mappingDetailModelCombo, 1, 4);
+            layout.Controls.Add(CreateMappingLabel("关联字段："), 2, 4);
+            layout.Controls.Add(_mappingParentCidTextBox, 3, 4);
+            layout.Controls.Add(_mappingNewMasterModelButton, 4, 4);
+            layout.Controls.Add(_mappingFileNameInfoLabel, 5, 4);
+            layout.SetColumnSpan(_mappingFileNameInfoLabel, 3);
+
             layout.Controls.Add(CreateMappingLabel("适用机台："), 0, 3);
             layout.Controls.Add(_mappingMachinePanel, 1, 3);
             layout.SetColumnSpan(_mappingMachinePanel, 7);
@@ -431,6 +469,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 ReadOnly = true
             });
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingDescriptionColumn, "说明", 150, true));
+            dataGridView1.Columns.Add(CreateMappingTextColumn(MappingRoleColumn, "归属", 65, true));
             var scope = new DataGridViewComboBoxColumn
             {
                 Name = MappingScopeColumn,
@@ -454,7 +493,9 @@ namespace MachineDataAcquisitionSystem.Forms
                 Width = 115,
                 FlatStyle = FlatStyle.Flat
             };
-            locatorType.Items.AddRange("cell", "labelOffset", "rowKey", "headerColumn", "rowColumn");
+            locatorType.Items.AddRange(
+                "cell", "labelOffset", "rowKey", "headerColumn", "rowColumn",
+                "fileNameFull", "fileNameStem", "fileNameSegment");
             dataGridView1.Columns.Add(locatorType);
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingLocatorValueColumn, "单元格 / 标签", 135, false));
             dataGridView1.Columns.Add(CreateMappingTextColumn(MappingRowOffsetColumn, "行偏移", 65, false));
@@ -502,6 +543,9 @@ namespace MachineDataAcquisitionSystem.Forms
             btnNewMappingScript.Click += MappingNewButton_Click;
             listBoxMappingScripts.SelectedIndexChanged += MappingDefinitionList_SelectedIndexChanged;
             _mappingModelCombo.SelectedIndexChanged += MappingModelCombo_SelectedIndexChanged;
+            _mappingDetailModelCombo.SelectedIndexChanged += MappingDetailModelCombo_SelectedIndexChanged;
+            _mappingParentCidTextBox.TextChanged += MappingParentCidTextBox_TextChanged;
+            _mappingNewMasterModelButton.Click += MappingNewMasterModelButton_Click;
             _mappingSheetCombo.SelectedIndexChanged += MappingSheetCombo_SelectedIndexChanged;
             _mappingModeCombo.SelectedIndexChanged += MappingModeCombo_SelectedIndexChanged;
             _mappingRuleNameTextBox.TextChanged += MappingRuleName_TextChanged;
@@ -642,6 +686,10 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void LoadMappingModels(int? preferredModelId = null)
         {
+            MappingModelChoice selectedDetailModel = GetSelectedMappingDetailModel();
+            int? preferredDetailModelId = selectedDetailModel == null
+                ? (int?)null
+                : selectedDetailModel.Id;
             if (!preferredModelId.HasValue)
             {
                 MappingModelChoice selectedModel = GetSelectedMappingModel();
@@ -655,7 +703,9 @@ namespace MachineDataAcquisitionSystem.Forms
             bool previouslySuppressingEvents = _mappingSuppressEvents;
             _mappingSuppressEvents = true;
             _mappingModelCombo.Items.Clear();
+            _mappingDetailModelCombo.Items.Clear();
             int selectedIndex = -1;
+            int selectedDetailIndex = -1;
             for (int index = 0; index < models.Count; index++)
             {
                 ModelCatalogItem model = models[index];
@@ -665,13 +715,27 @@ namespace MachineDataAcquisitionSystem.Forms
                     ModelName = model.ModelName,
                     TableName = model.TableName
                 });
+                _mappingDetailModelCombo.Items.Add(new MappingModelChoice
+                {
+                    Id = model.Id,
+                    ModelName = model.ModelName,
+                    TableName = model.TableName
+                });
                 if (preferredModelId == model.Id)
                     selectedIndex = index;
+                if (preferredDetailModelId == model.Id)
+                    selectedDetailIndex = index;
             }
             if (selectedIndex >= 0)
                 _mappingModelCombo.SelectedIndex = selectedIndex;
             else if (_mappingModelCombo.Items.Count > 0)
                 _mappingModelCombo.SelectedIndex = 0;
+            if (selectedDetailIndex >= 0)
+                _mappingDetailModelCombo.SelectedIndex = selectedDetailIndex;
+            else if (_mappingDetailModelCombo.Items.Count > 1)
+                _mappingDetailModelCombo.SelectedIndex = 1;
+            else if (_mappingDetailModelCombo.Items.Count > 0)
+                _mappingDetailModelCombo.SelectedIndex = 0;
             _mappingSuppressEvents = previouslySuppressingEvents;
         }
 
@@ -1008,6 +1072,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingSheetCombo.Items.Clear();
             _mappingExtensionLabel.Text = "扩展名：-";
             SelectMappingMode(MappingRecordMode.SingleRecord);
+            _mappingParentCidTextBox.Text = "PARENT_CID";
             LoadMappingMachineCheckboxes();
             _mappingModelCombo.Enabled = true;
             if (_mappingModelCombo.Items.Count > 0 && _mappingModelCombo.SelectedIndex < 0)
@@ -1073,10 +1138,20 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingCurrentVersion = version;
                 _mappingCurrentDefinition = definition;
                 _mappingTemplateSignature = definition.TemplateSignature;
-                _mappingRepeatedRows = definition.RepeatedRows;
+                _mappingRepeatedRows = definition.RecordMode == MappingRecordMode.MasterDetail &&
+                    definition.MasterDetail != null && definition.MasterDetail.Detail != null
+                    ? definition.MasterDetail.Detail.RepeatedRows
+                    : definition.RepeatedRows;
                 SelectMappingMode(definition.RecordMode);
 
                 SelectMappingModel(definition.ModelId);
+                if (definition.RecordMode == MappingRecordMode.MasterDetail && definition.MasterDetail != null)
+                {
+                    SelectMappingModelInCombo(
+                        _mappingDetailModelCombo,
+                        definition.MasterDetail.Detail.ModelId);
+                    _mappingParentCidTextBox.Text = definition.MasterDetail.ParentCidField;
+                }
                 _mappingModelCombo.Enabled = false;
                 _mappingRuleNameTextBox.Text = definition.RuleName;
 
@@ -1119,25 +1194,78 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingModelCombo.SelectedIndex = -1;
         }
 
+        private static void SelectMappingModelInCombo(ComboBox combo, int modelId)
+        {
+            for (int index = 0; index < combo.Items.Count; index++)
+            {
+                var model = combo.Items[index] as MappingModelChoice;
+                if (model != null && model.Id == modelId)
+                {
+                    combo.SelectedIndex = index;
+                    return;
+                }
+            }
+            combo.SelectedIndex = -1;
+        }
+
         private void PopulateMappingRows(int modelId, MappingRuleDefinition definition)
         {
             _mappingApplyingSuggestion = true;
             dataGridView1.Rows.Clear();
             try
             {
+                if (GetSelectedMappingMode() == MappingRecordMode.MasterDetail)
+                {
+                    MappingModelChoice master = GetSelectedMappingModel();
+                    MappingModelChoice detail = GetSelectedMappingDetailModel();
+                    MappingTargetDefinition persistedMaster = definition == null || definition.MasterDetail == null
+                        ? null
+                        : definition.MasterDetail.Master;
+                    MappingTargetDefinition persistedDetail = definition == null || definition.MasterDetail == null
+                        ? null
+                        : definition.MasterDetail.Detail;
+                    PopulateMappingTargetRows(
+                        master == null ? 0 : master.Id,
+                        persistedMaster == null ? null : persistedMaster.Fields,
+                        true,
+                        null);
+                    PopulateMappingTargetRows(
+                        detail == null ? 0 : detail.Id,
+                        persistedDetail == null ? null : persistedDetail.Fields,
+                        false,
+                        _mappingParentCidTextBox.Text.Trim());
+                    return;
+                }
+
+                PopulateMappingTargetRows(modelId, definition == null ? null : definition.Fields, false, null);
+            }
+            finally
+            {
+                _mappingApplyingSuggestion = false;
+            }
+        }
+
+        private void PopulateMappingTargetRows(
+            int modelId,
+            IEnumerable<FieldMappingRule> persistedRules,
+            bool isMaster,
+            string excludedField)
+        {
                 List<ModelSchemaField> schemaFields = modelId > 0
                     ? LoadMappingFields(modelId)
                     : new List<ModelSchemaField>();
-                var persisted = (definition == null ? Enumerable.Empty<FieldMappingRule>() : definition.Fields)
+                var persisted = (persistedRules ?? Enumerable.Empty<FieldMappingRule>())
                     .Where(field => field != null && !string.IsNullOrWhiteSpace(field.TargetField))
                     .ToDictionary(field => field.TargetField, StringComparer.Ordinal);
                 var fieldNames = new HashSet<string>(StringComparer.Ordinal);
 
-                foreach (ModelSchemaField field in schemaFields)
+                foreach (ModelSchemaField field in schemaFields.Where(field =>
+                    !string.Equals(field.FieldName, "CID", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(field.FieldName, excludedField, StringComparison.OrdinalIgnoreCase)))
                 {
                     FieldMappingRule rule;
                     persisted.TryGetValue(field.FieldName, out rule);
-                    AddMappingRow(field, rule, false);
+                    AddMappingRow(field, rule, false, isMaster);
                     fieldNames.Add(field.FieldName);
                 }
 
@@ -1149,16 +1277,11 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         FieldType = orphan.TargetType,
                         IsRequired = orphan.IsRequired,
                         Description = orphan.TargetDescription
-                    }, orphan, true);
-                }
-            }
-            finally
-            {
-                _mappingApplyingSuggestion = false;
+                    }, orphan, true, isMaster);
             }
         }
 
-        private void AddMappingRow(ModelSchemaField field, FieldMappingRule rule, bool orphan)
+        private void AddMappingRow(ModelSchemaField field, FieldMappingRule rule, bool orphan, bool isMaster)
         {
             int index = dataGridView1.Rows.Add();
             DataGridViewRow row = dataGridView1.Rows[index];
@@ -1166,6 +1289,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             row.Cells[MappingTargetTypeColumn].Value = field.FieldType;
             row.Cells[MappingRequiredColumn].Value = field.IsRequired;
             row.Cells[MappingDescriptionColumn].Value = field.Description ?? string.Empty;
+            row.Cells[MappingRoleColumn].Value = isMaster ? "主表" : "子表";
             MappingFieldScope fieldScope = rule == null ? MappingFieldScope.Common : rule.Scope;
             row.Cells[MappingScopeColumn].Value = fieldScope == MappingFieldScope.RowColumn
                 ? "明细列"
@@ -1173,12 +1297,23 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             row.Cells[MappingKeyColumn].Value = fieldScope == MappingFieldScope.RowColumn &&
                 _mappingRepeatedRows != null && rule != null && rule.Locator != null &&
                 rule.Locator.ColumnOffset == _mappingRepeatedRows.KeyColumnOffset;
+            if (isMaster)
+            {
+                row.Cells[MappingScopeColumn].ReadOnly = true;
+                row.Cells[MappingKeyColumn].ReadOnly = true;
+                row.Cells[MappingScopeColumn].Style.BackColor = SystemColors.Control;
+                row.Cells[MappingKeyColumn].Style.BackColor = SystemColors.Control;
+            }
             row.Cells[MappingLocatorTypeColumn].Value = rule == null || rule.Locator == null
-                ? "labelOffset"
+                ? (isMaster ? "fileNameFull" : "labelOffset")
                 : rule.Locator.Type;
             row.Cells[MappingLocatorValueColumn].Value = rule == null || rule.Locator == null
                 ? string.Empty
-                : (rule.Locator.Type == "cell" ? rule.Locator.Cell : rule.Locator.Text);
+                : (rule.Locator.Type == "cell"
+                    ? rule.Locator.Cell
+                    : (rule.Locator.Type == "fileNameSegment"
+                        ? (rule.Locator.SegmentIndex + 1).ToString(CultureInfo.InvariantCulture)
+                        : rule.Locator.Text));
             row.Cells[MappingRowOffsetColumn].Value = rule == null || rule.Locator == null
                 ? "0"
                 : rule.Locator.RowOffset.ToString(CultureInfo.InvariantCulture);
@@ -1214,7 +1349,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 ConfirmationState = confirmation,
                 IsOrphan = orphan,
                 AnchorCell = rule == null || rule.Locator == null ? null : rule.Locator.AnchorCell,
-                AnchorText = rule == null || rule.Locator == null ? null : rule.Locator.AnchorText
+                AnchorText = rule == null || rule.Locator == null ? null : rule.Locator.AnchorText,
+                IsMaster = isMaster
             };
             row.Tag = metadata;
             row.Cells[MappingHumanConfirmedColumn].Value = confirmation == MappingConfirmationState.HumanConfirmed;
@@ -1236,14 +1372,41 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             MarkMappingDirty();
         }
 
+        private void MappingDetailModelCombo_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            if (_mappingSuppressEvents || _mappingCurrentDefinition != null ||
+                GetSelectedMappingMode() != MappingRecordMode.MasterDetail) return;
+            MappingModelChoice model = GetSelectedMappingModel();
+            PopulateMappingRows(model == null ? 0 : model.Id, null);
+            MarkMappingDirty();
+        }
+
+        private void MappingParentCidTextBox_TextChanged(object sender, EventArgs e)
+        {
+            if (_mappingSuppressEvents || GetSelectedMappingMode() != MappingRecordMode.MasterDetail) return;
+            MarkMappingDirty();
+        }
+
+        private void MappingNewMasterModelButton_Click(object sender, EventArgs e)
+        {
+            if (!ConfirmDiscardMappingChanges()) return;
+            tabControl1.SelectedTab = tabPageModel;
+            btnAddModel.PerformClick();
+        }
+
         private void MappingModeCombo_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (_mappingSuppressEvents) return;
             CancelMappingPointSelection(false);
-            if (GetSelectedMappingMode() == MappingRecordMode.SingleRecord)
+            MappingRecordMode mode = GetSelectedMappingMode();
+            if (mode == MappingRecordMode.SingleRecord)
                 SetMappingStatus("单条记录模式：逐个配置公共字段定位。", Color.DimGray);
-            else
+            else if (mode == MappingRecordMode.RepeatingRows)
                 SetMappingStatus("重复行模式：在上方样本网格框选一行表头和首条数据，再点击“框选表格”。", Color.RoyalBlue);
+            else
+                SetMappingStatus("主子表模式：主表字段来自文件名，子表字段来自 Excel 重复行。", Color.RoyalBlue);
+            MappingModelChoice model = GetSelectedMappingModel();
+            PopulateMappingRows(model == null ? 0 : model.Id, null);
             MarkMappingDirty();
         }
 
@@ -1902,6 +2065,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             var state = new StringBuilder();
             MappingModelChoice model = GetSelectedMappingModel();
             AppendMappingStatePart(state, model == null ? 0 : model.Id);
+            MappingModelChoice detailModel = GetSelectedMappingDetailModel();
+            AppendMappingStatePart(state, detailModel == null ? 0 : detailModel.Id);
+            AppendMappingStatePart(state, _mappingParentCidTextBox == null ? null : _mappingParentCidTextBox.Text);
             AppendMappingStatePart(state, _mappingRuleNameTextBox == null ? null : _mappingRuleNameTextBox.Text);
             AppendMappingStatePart(state, _mappingSheetCombo == null ? null : _mappingSheetCombo.SelectedItem);
             AppendMappingStatePart(state, (int)GetSelectedMappingMode());
@@ -1922,6 +2088,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 MappingTargetTypeColumn,
                 MappingRequiredColumn,
                 MappingDescriptionColumn,
+                MappingRoleColumn,
                 MappingScopeColumn,
                 MappingKeyColumn,
                 MappingLocatorTypeColumn,
@@ -1948,6 +2115,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     AppendMappingStatePart(state, metadata == null ? null : metadata.AnchorCell);
                     AppendMappingStatePart(state, metadata == null ? null : metadata.AnchorText);
                     AppendMappingStatePart(state, metadata != null && metadata.IsOrphan);
+                    AppendMappingStatePart(state, metadata != null && metadata.IsMaster);
                 }
             }
             return MappingRuleSerializer.Sha256(state.ToString());
@@ -1994,6 +2162,16 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         : _mappingCurrentDefinition.SheetName;
                     _mappingSnapshot = snapshot;
                     _mappingSamplePathTextBox.Text = dialog.FileName;
+                    FileNameExtractionResult fileName = FileNameExtractionParser.Inspect(dialog.FileName);
+                    _mappingFileNameInfoLabel.Text = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "文件名：{0} / 无扩展名：{1} / 片段：{2}",
+                        fileName.FullName,
+                        fileName.Stem,
+                        fileName.Segments.Count == 0
+                            ? "（无）"
+                            : string.Join("、", fileName.Segments.Select((value, index) =>
+                                (index + 1).ToString(CultureInfo.InvariantCulture) + "=" + value)));
                     _mappingExtensionLabel.Text = "扩展名：" + snapshot.FileExtension;
                     LoadMappingSheetChoices(preferredSheet);
                     if (_mappingCurrentDefinition != null &&
@@ -2198,7 +2376,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 .Where(row =>
                 {
                     var metadata = row.Tag as MappingRowMetadata;
-                    return metadata == null || !metadata.IsOrphan;
+                    return metadata == null || (!metadata.IsOrphan && !metadata.IsMaster);
                 }).ToList();
             var targetNames = targetRows.Select(row => CellText(row, MappingTargetFieldColumn)).ToList();
 
@@ -2376,7 +2554,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingApplyingSuggestion = true;
             try
             {
-                SelectMappingMode(MappingRecordMode.RepeatingRows);
+                if (GetSelectedMappingMode() != MappingRecordMode.MasterDetail)
+                    SelectMappingMode(MappingRecordMode.RepeatingRows);
                 foreach (DataGridViewRow targetRow in dataGridView1.Rows)
                 {
                     if (GetMappingFieldScope(targetRow) != MappingFieldScope.RowColumn) continue;
@@ -2390,8 +2569,16 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     UpdateMappingConfirmationCell(targetRow);
                 }
 
-                var targetByName = dataGridView1.Rows.Cast<DataGridViewRow>().ToDictionary(
-                    row => CellText(row, MappingTargetFieldColumn), StringComparer.Ordinal);
+                var targetByName = dataGridView1.Rows.Cast<DataGridViewRow>()
+                    .Where(row =>
+                    {
+                        var metadata = row.Tag as MappingRowMetadata;
+                        return metadata == null || !metadata.IsMaster;
+                    })
+                    .ToDictionary(
+                    row => CellText(row, MappingTargetFieldColumn),
+                    row => row,
+                    StringComparer.Ordinal);
                 foreach (DataGridViewRow sourceRow in mappedRows)
                 {
                     string targetName = Convert.ToString(sourceRow.Cells["TargetField"].Value, CultureInfo.InvariantCulture);
@@ -2750,6 +2937,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 bool requiresSample = MappingSavePolicy.RequiresSample(
                     _mappingCurrentVersion,
                     _mappingDirty);
+                if (GetSelectedMappingMode() == MappingRecordMode.MasterDetail &&
+                    !EnsureMasterDetailRelationFieldAndSource())
+                    return;
                 MappingRuleDefinition definition;
                 MappingPreviewResult preview = null;
                 if (requiresSample)
@@ -2775,7 +2965,18 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     definition.TemplateSignature = preview.TemplateSignature;
                     _mappingTemplateSignature = preview.TemplateSignature;
                     string derivedScriptCode = new MappingScriptGenerator().Generate(definition);
-                    ScriptEngine.ValidateCompilation(derivedScriptCode, definition.ModelId);
+                    if (definition.RecordMode == MappingRecordMode.MasterDetail)
+                    {
+                        ScriptEngine.ValidateCompilation(
+                            derivedScriptCode,
+                            new[]
+                            {
+                                definition.MasterDetail.Master,
+                                definition.MasterDetail.Detail
+                            });
+                    }
+                    else
+                        ScriptEngine.ValidateCompilation(derivedScriptCode, definition.ModelId);
                 }
                 else
                 {
@@ -2784,13 +2985,22 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         throw new ParseRuleStateException("当前字段映射尚未完成验证，请选择样本后保存。");
                 }
 
+                DialogResult publishChoice = MessageBox.Show(
+                    this,
+                    "样本预览和校验已通过。\r\n\r\n是：保存、验证并发布到所选机台\r\n否：仅保存并验证，不发布\r\n取消：放弃本次操作",
+                    "保存/发布确认",
+                    MessageBoxButtons.YesNoCancel,
+                    MessageBoxIcon.Question);
+                if (publishChoice == DialogResult.Cancel) return;
+                bool publishNow = publishChoice == DialogResult.Yes;
+
                 var expectedBindings = new Dictionary<int, ParseRuleVersion>();
                 var conflicts = new List<string>();
                 foreach (MappingMachineChoice machine in selectedMachines)
                 {
-                    ParseRuleVersion existing = _mappingRuleStore.GetPublished(
+                    ParseRuleVersion existing = publishNow ? _mappingRuleStore.GetPublished(
                         machine.Id.ToString(CultureInfo.InvariantCulture),
-                        definition.NormalizedExtension);
+                        definition.NormalizedExtension) : null;
                     expectedBindings[machine.Id] = existing;
                     if (existing != null &&
                         (definition.DefinitionId <= 0 || existing.DefinitionId != definition.DefinitionId))
@@ -2832,6 +3042,21 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         BuildMappingValidationSummary(preview));
                     _mappingCurrentDefinition = MappingRuleSerializer.Deserialize(
                         _mappingCurrentVersion.DefinitionJson);
+                }
+
+                if (!publishNow)
+                {
+                    AcceptMappingEditorStateAsClean();
+                    RefreshMappingDefinitionList(_mappingCurrentVersion.DefinitionId);
+                    UpdateMappingVersionStatus();
+                    UpdateMappingCommandState();
+                    MessageBox.Show(
+                        this,
+                        "映射已保存并通过验证，尚未发布到任何机台。",
+                        "保存完成",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    return;
                 }
 
                 Dictionary<string, ParseRuleVersion> previouslyPublished =
@@ -2916,6 +3141,57 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             return saved;
         }
 
+        private bool EnsureMasterDetailRelationFieldAndSource()
+        {
+            MappingModelChoice detailModel = GetSelectedMappingDetailModel();
+            if (detailModel == null)
+                throw new MappingValidationException("请选择有效的子模型。");
+            string fieldName = (_mappingParentCidTextBox.Text ?? string.Empty).Trim();
+            if (!MappingRuleSerializer.IsIdentifier(fieldName) ||
+                string.Equals(fieldName, "CID", StringComparison.OrdinalIgnoreCase))
+                throw new MappingValidationException("关联字段必须是非 CID 的合法标识符。");
+
+            bool exists;
+            using (var connection = new SQLiteConnection(DatabaseHelper.GetConnectionString()))
+            using (var command = connection.CreateCommand())
+            {
+                connection.Open();
+                command.CommandText = @"
+SELECT COUNT(1) FROM ModelFields
+WHERE ModelId=@ModelId AND FieldName=@FieldName;";
+                command.Parameters.Add("@ModelId", DbType.Int32).Value = detailModel.Id;
+                command.Parameters.Add("@FieldName", DbType.String).Value = fieldName;
+                exists = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+            }
+            if (!exists)
+            {
+                DialogResult confirmation = MessageBox.Show(
+                    this,
+                    "子模型缺少关联字段 " + fieldName + "。\r\n\r\n" +
+                    "系统将把它作为可空 long、非主键、非自增的系统字段加入数据模型，并重新生成模型代码；不会修改已有业务字段。是否继续？",
+                    "增加主子表关联字段",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+                if (confirmation != DialogResult.Yes) return false;
+            }
+
+            RelationFieldProvisionResult result = new MasterDetailConfigurationService(
+                DatabaseHelper.GetConnectionString()).EnsureRelationField(detailModel.Id, fieldName);
+            if (result.Created)
+            {
+                var model = new ModelConfig
+                {
+                    Id = detailModel.Id,
+                    ModelName = detailModel.ModelName,
+                    TableName = detailModel.TableName,
+                    IsActive = true
+                };
+                GenerateModelClass(model, LoadFieldList(detailModel.Id), false);
+                SetMappingStatus("已增加子表关联字段并重新生成模型代码：" + fieldName, Color.DarkGreen);
+            }
+            return true;
+        }
+
         private MappingRuleDefinition BuildMappingDefinition(bool requireRequiredMappings)
         {
             dataGridView1.EndEdit();
@@ -2935,6 +3211,15 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             string sheetName = Convert.ToString(_mappingSheetCombo.SelectedItem, CultureInfo.InvariantCulture);
             if (string.IsNullOrWhiteSpace(sheetName))
                 throw new MappingValidationException("请选择工作表。");
+
+            if (GetSelectedMappingMode() == MappingRecordMode.MasterDetail)
+            {
+                return BuildMasterDetailMappingDefinition(
+                    model,
+                    extension,
+                    sheetName,
+                    requireRequiredMappings);
+            }
 
             var missingRequired = new List<string>();
             var definition = new MappingRuleDefinition
@@ -2983,28 +3268,145 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             return definition;
         }
 
+        private MappingRuleDefinition BuildMasterDetailMappingDefinition(
+            MappingModelChoice masterModel,
+            string extension,
+            string sheetName,
+            bool requireRequiredMappings)
+        {
+            MappingModelChoice detailModel = GetSelectedMappingDetailModel();
+            if (detailModel == null)
+                throw new MappingValidationException("请选择有效的子模型。");
+            if (detailModel.Id == masterModel.Id)
+                throw new MappingValidationException("主模型和子模型不能相同。");
+            if (!MappingRuleSerializer.IsIdentifier(detailModel.ModelName))
+                throw new MappingValidationException("子模型名称必须是合法的 C# 标识符。");
+            string parentCidField = (_mappingParentCidTextBox.Text ?? string.Empty).Trim();
+            if (!MappingRuleSerializer.IsIdentifier(parentCidField) ||
+                string.Equals(parentCidField, "CID", StringComparison.OrdinalIgnoreCase))
+                throw new MappingValidationException("关联字段必须是非 CID 的合法标识符。");
+            if (_mappingRepeatedRows == null)
+                throw new MappingValidationException("请先框选 Excel 表头和首条数据，配置子表重复行列映射。");
+
+            int segmentCount;
+            if (!string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
+                segmentCount = FileNameExtractionParser.Inspect(_mappingSamplePathTextBox.Text).Segments.Count;
+            else if (_mappingCurrentDefinition != null &&
+                _mappingCurrentDefinition.MasterDetail != null &&
+                _mappingCurrentDefinition.MasterDetail.FileName != null)
+                segmentCount = _mappingCurrentDefinition.MasterDetail.FileName.ExpectedSegmentCount;
+            else
+                throw new MappingValidationException("主子表映射必须选择文件名样本。");
+
+            var masterTarget = new MappingTargetDefinition
+            {
+                ModelId = masterModel.Id,
+                TargetModelType = masterModel.ModelName,
+                ModelSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(masterModel.Id))
+            };
+            var detailTarget = new MappingTargetDefinition
+            {
+                ModelId = detailModel.Id,
+                TargetModelType = detailModel.ModelName,
+                ModelSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(detailModel.Id)),
+                RepeatedRows = _mappingRepeatedRows
+            };
+            var missingRequired = new List<string>();
+            foreach (DataGridViewRow row in dataGridView1.Rows)
+            {
+                var metadata = row.Tag as MappingRowMetadata;
+                if (metadata != null && metadata.IsOrphan) continue;
+                bool required = Convert.ToBoolean(row.Cells[MappingRequiredColumn].Value ?? false);
+                if (!HasMappingLocator(row))
+                {
+                    if (requireRequiredMappings && required)
+                        missingRequired.Add((metadata != null && metadata.IsMaster ? "主表." : "子表.") +
+                            CellText(row, MappingTargetFieldColumn));
+                    continue;
+                }
+                FieldMappingRule field = CreateMappingFieldRule(row);
+                if (metadata != null && metadata.IsMaster)
+                    masterTarget.Fields.Add(field);
+                else
+                    detailTarget.Fields.Add(field);
+            }
+            if (missingRequired.Count > 0)
+                throw new MappingValidationException("必填字段尚未映射：" + string.Join(", ", missingRequired));
+            if (masterTarget.Fields.Count == 0)
+                throw new MappingValidationException("主表至少需要一个文件名字段映射。");
+            if (detailTarget.Fields.Count == 0)
+                throw new MappingValidationException("子表至少需要一个重复行字段映射。");
+
+            var definition = new MappingRuleDefinition
+            {
+                DefinitionId = _mappingCurrentDefinition == null ? 0 : _mappingCurrentDefinition.DefinitionId,
+                RuleName = _mappingRuleNameTextBox.Text.Trim(),
+                ModelId = masterModel.Id,
+                TargetModelType = masterModel.ModelName,
+                ModelSchemaHash = masterTarget.ModelSchemaHash,
+                NormalizedExtension = extension,
+                SheetName = sheetName,
+                TemplateSignature = _mappingTemplateSignature,
+                RecordMode = MappingRecordMode.MasterDetail,
+                MasterDetail = new MasterDetailMappingDefinition
+                {
+                    Master = masterTarget,
+                    Detail = detailTarget,
+                    ParentCidField = parentCidField,
+                    FileName = new FileNameExtractionDefinition
+                    {
+                        ExpectedSegmentCount = segmentCount
+                    }
+                }
+            };
+            MappingRuleSerializer.ValidateDefinition(definition);
+            return definition;
+        }
+
         private FieldMappingRule CreateMappingFieldRule(DataGridViewRow row)
         {
             FieldMappingRule field = CreateFieldRuleMetadata(row);
             field.Scope = GetMappingFieldScope(row);
             string locatorType = CellText(row, MappingLocatorTypeColumn);
             string locatorValue = CellText(row, MappingLocatorValueColumn);
+            bool isFileNameLocator = locatorType == "fileNameFull" ||
+                locatorType == "fileNameStem" ||
+                locatorType == "fileNameSegment";
             var locator = new MappingLocator
             {
                 Type = locatorType,
-                RowOffset = ParseMappingInteger(row, MappingRowOffsetColumn, "行偏移"),
-                ColumnOffset = ParseMappingInteger(row, MappingColumnOffsetColumn, "列偏移"),
-                ValueColumn = CellText(row, MappingValueColumnColumn),
-                DataRowOffset = ParseMappingInteger(row, MappingDataRowOffsetColumn, "数据行偏移")
+                RowOffset = isFileNameLocator
+                    ? 0
+                    : ParseMappingInteger(row, MappingRowOffsetColumn, "行偏移"),
+                ColumnOffset = isFileNameLocator
+                    ? 0
+                    : ParseMappingInteger(row, MappingColumnOffsetColumn, "列偏移"),
+                ValueColumn = isFileNameLocator
+                    ? null
+                    : CellText(row, MappingValueColumnColumn),
+                DataRowOffset = isFileNameLocator
+                    ? 0
+                    : ParseMappingInteger(row, MappingDataRowOffsetColumn, "数据行偏移")
             };
-            if (locatorType == "cell")
+            if (locatorType == "fileNameSegment")
+            {
+                int oneBasedSegment;
+                if (!int.TryParse(
+                    locatorValue,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out oneBasedSegment) || oneBasedSegment <= 0)
+                    throw new MappingValidationException(field.TargetField + " 的文件名片段序号必须是正整数。");
+                locator.SegmentIndex = oneBasedSegment - 1;
+            }
+            else if (locatorType == "cell")
             {
                 locator.Cell = locatorValue;
                 var anchorMetadata = row.Tag as MappingRowMetadata;
                 locator.AnchorCell = anchorMetadata == null ? null : anchorMetadata.AnchorCell;
                 locator.AnchorText = anchorMetadata == null ? null : anchorMetadata.AnchorText;
             }
-            else
+            else if (!isFileNameLocator)
                 locator.Text = locatorValue;
             field.Locator = locator;
 
@@ -3103,6 +3505,18 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         private static bool HasMappingLocator(DataGridViewRow row)
         {
             string locatorType = CellText(row, MappingLocatorTypeColumn);
+            if (string.Equals(locatorType, "fileNameFull", StringComparison.Ordinal) ||
+                string.Equals(locatorType, "fileNameStem", StringComparison.Ordinal))
+                return true;
+            if (string.Equals(locatorType, "fileNameSegment", StringComparison.Ordinal))
+            {
+                int oneBasedSegment;
+                return int.TryParse(
+                    CellText(row, MappingLocatorValueColumn),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out oneBasedSegment) && oneBasedSegment > 0;
+            }
             if (string.Equals(locatorType, "rowColumn", StringComparison.Ordinal))
                 return GetMappingFieldScope(row) == MappingFieldScope.RowColumn;
             return !string.IsNullOrWhiteSpace(locatorType) &&
@@ -3165,13 +3579,32 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             _mappingRecordsGrid.Rows.Clear();
             _mappingRecordsGrid.Columns.Clear();
-            if (preview == null || preview.Records.Count == 0) return;
+            if (preview == null || (preview.Records.Count == 0 && preview.Fields.Count == 0)) return;
 
-            _mappingRecordsGrid.Columns.Add("PreviewExcelRow", "Excel 行");
-            List<string> targets = preview.Records.SelectMany(record => record.Fields.Keys)
+            _mappingRecordsGrid.Columns.Add("PreviewExcelRow", "归属 / Excel 行");
+            List<string> targets = preview.Fields.Keys
+                .Concat(preview.Records.SelectMany(record => record.Fields.Keys))
                 .Distinct(StringComparer.Ordinal).ToList();
+            bool isMasterDetail = GetSelectedMappingMode() == MappingRecordMode.MasterDetail;
+            string parentCidField = (_mappingParentCidTextBox.Text ?? string.Empty).Trim();
+            if (isMasterDetail && !string.IsNullOrWhiteSpace(parentCidField) &&
+                !targets.Contains(parentCidField, StringComparer.Ordinal))
+                targets.Add(parentCidField);
             foreach (string target in targets)
                 _mappingRecordsGrid.Columns.Add("Preview_" + target, target);
+
+            if (preview.Fields.Count > 0)
+            {
+                object[] masterValues = new object[targets.Count + 1];
+                masterValues[0] = isMasterDetail ? "主表" : "公共字段";
+                for (int index = 0; index < targets.Count; index++)
+                {
+                    MappingPreviewFieldResult field;
+                    if (preview.Fields.TryGetValue(targets[index], out field))
+                        masterValues[index + 1] = field.ErrorCode ?? Convert.ToString(field.Value, CultureInfo.InvariantCulture);
+                }
+                _mappingRecordsGrid.Rows.Add(masterValues);
+            }
 
             foreach (MappingPreviewRecordResult record in preview.Records)
             {
@@ -3182,6 +3615,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     MappingPreviewFieldResult field;
                     if (record.Fields.TryGetValue(targets[index], out field))
                         values[index + 1] = field.ErrorCode ?? Convert.ToString(field.Value, CultureInfo.InvariantCulture);
+                    else if (isMasterDetail && string.Equals(targets[index], parentCidField, StringComparison.Ordinal))
+                        values[index + 1] = "<运行时主表CID>";
                 }
                 int rowIndex = _mappingRecordsGrid.Rows.Add(values);
                 for (int index = 0; index < targets.Count; index++)
@@ -3439,6 +3874,13 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             return _mappingModelCombo.SelectedItem as MappingModelChoice;
         }
 
+        private MappingModelChoice GetSelectedMappingDetailModel()
+        {
+            return _mappingDetailModelCombo == null
+                ? null
+                : _mappingDetailModelCombo.SelectedItem as MappingModelChoice;
+        }
+
         private void EnsureMappedRowsHumanConfirmed()
         {
             List<string> pending = dataGridView1.Rows
@@ -3540,6 +3982,19 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     return;
                 }
             }
+            if (_mappingCurrentDefinition != null &&
+                _mappingCurrentDefinition.RecordMode == MappingRecordMode.MasterDetail &&
+                _mappingCurrentDefinition.MasterDetail != null)
+            {
+                MappingTargetDefinition detail = _mappingCurrentDefinition.MasterDetail.Detail;
+                string detailHash = ModelSchemaService.ComputeHash(LoadMappingFields(detail.ModelId));
+                if (!string.Equals(detailHash, detail.ModelSchemaHash, StringComparison.Ordinal))
+                {
+                    text += " / 子模型结构已变化";
+                    SetMappingStatus(text, Color.Firebrick);
+                    return;
+                }
+            }
             SetMappingStatus(text, _mappingDirty ? Color.DarkOrange : Color.DarkGreen);
         }
 
@@ -3556,6 +4011,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             if (_mappingSaveButton == null) return;
             bool ready = _mappingDataLoaded && _mappingRuleStore != null;
             bool hasModel = GetSelectedMappingModel() != null;
+            bool isMasterDetail = GetSelectedMappingMode() == MappingRecordMode.MasterDetail;
+            bool hasDetailModel = !isMasterDetail || GetSelectedMappingDetailModel() != null;
             bool hasSample = _mappingSnapshot != null && GetSelectedMappingSheet() != null;
             bool hasDefinition = _mappingCurrentVersion != null;
             bool canReuseValidatedVersion = !MappingSavePolicy.RequiresSample(
@@ -3564,11 +4021,15 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
             _mappingBrowseButton.Enabled = ready && !_mappingAiBusy;
             _mappingModelCombo.Enabled = ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
+            _mappingDetailModelCombo.Enabled = isMasterDetail && ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
+            _mappingParentCidTextBox.Enabled = isMasterDetail && ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
+            _mappingNewMasterModelButton.Enabled = isMasterDetail && ready && !_mappingAiBusy;
+            _mappingFileNameInfoLabel.ForeColor = isMasterDetail ? Color.DimGray : SystemColors.GrayText;
             _mappingRuleNameTextBox.Enabled = ready && !_mappingAiBusy;
             _mappingSheetCombo.Enabled = ready && !_mappingAiBusy && hasSample;
             _mappingModeCombo.Enabled = ready && !_mappingAiBusy;
             _mappingFrameTableButton.Enabled = ready && hasSample && !_mappingAiBusy &&
-                GetSelectedMappingMode() == MappingRecordMode.RepeatingRows;
+                (GetSelectedMappingMode() == MappingRecordMode.RepeatingRows || isMasterDetail);
             dataGridView1.Enabled = ready && !_mappingAiBusy;
             btnNewMappingScript.Enabled = ready && !_mappingAiBusy;
             listBoxMappingScripts.Enabled = ready && !_mappingAiBusy;
@@ -3585,7 +4046,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 _mappingAiOptions == null
                     ? (_mappingAiUnavailableReason ?? "AI 未配置")
                     : "仅填充空白且未确认项；返回失败时不修改草稿");
-            _mappingSaveButton.Enabled = ready && hasModel && !_mappingAiBusy &&
+            _mappingSaveButton.Enabled = ready && hasModel && hasDetailModel && !_mappingAiBusy &&
                 (hasSample || canReuseValidatedVersion);
             _mappingDeleteButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
         }
@@ -3675,6 +4136,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             public MappingConfirmationState ConfirmationState { get; set; }
             public bool IsOrphan { get; set; }
+            public bool IsMaster { get; set; }
             public string AnchorCell { get; set; }
             public string AnchorText { get; set; }
         }

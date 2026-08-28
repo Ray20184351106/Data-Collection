@@ -31,6 +31,7 @@
             this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(ConfigForm));
             this.tabControl1 = new System.Windows.Forms.TabControl();
+            this.tabPageBasicSettings = new System.Windows.Forms.TabPage();
             this.tabPage1 = new System.Windows.Forms.TabPage();
             this.panel1 = new System.Windows.Forms.Panel();
             this.btnCancel = new System.Windows.Forms.Button();
@@ -80,6 +81,7 @@
             // 
             // tabControl1
             // 
+            this.tabControl1.Controls.Add(this.tabPageBasicSettings);
             this.tabControl1.Controls.Add(this.tabPage1);
             this.tabControl1.Controls.Add(this.tabPage2);
             this.tabControl1.Controls.Add(this.tabPage3);
@@ -94,6 +96,17 @@
             this.tabControl1.Size = new System.Drawing.Size(1148, 713);
             this.tabControl1.TabIndex = 0;
             // 
+            // tabPageBasicSettings
+            //
+            this.tabPageBasicSettings.Location = new System.Drawing.Point(4, 26);
+            this.tabPageBasicSettings.Margin = new System.Windows.Forms.Padding(4);
+            this.tabPageBasicSettings.Name = "tabPageBasicSettings";
+            this.tabPageBasicSettings.Padding = new System.Windows.Forms.Padding(4);
+            this.tabPageBasicSettings.Size = new System.Drawing.Size(1140, 683);
+            this.tabPageBasicSettings.TabIndex = 0;
+            this.tabPageBasicSettings.Text = "基础配置";
+            this.tabPageBasicSettings.UseVisualStyleBackColor = true;
+            //
             // tabPage1
             // 
             this.tabPage1.Controls.Add(this.panel1);
@@ -103,7 +116,7 @@
             this.tabPage1.Name = "tabPage1";
             this.tabPage1.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage1.Size = new System.Drawing.Size(1140, 683);
-            this.tabPage1.TabIndex = 0;
+            this.tabPage1.TabIndex = 1;
             this.tabPage1.Text = "路径配置";
             this.tabPage1.UseVisualStyleBackColor = true;
             // 
@@ -183,7 +196,7 @@
             this.tabPage2.Name = "tabPage2";
             this.tabPage2.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage2.Size = new System.Drawing.Size(1140, 683);
-            this.tabPage2.TabIndex = 1;
+            this.tabPage2.TabIndex = 2;
             this.tabPage2.Text = "数据库配置";
             this.tabPage2.UseVisualStyleBackColor = true;
             // 
@@ -194,7 +207,7 @@
             this.tabPage3.Name = "tabPage3";
             this.tabPage3.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage3.Size = new System.Drawing.Size(1140, 683);
-            this.tabPage3.TabIndex = 2;
+            this.tabPage3.TabIndex = 3;
             this.tabPage3.Text = "预警配置";
             this.tabPage3.UseVisualStyleBackColor = true;
             // 
@@ -205,7 +218,7 @@
             this.tabPage4.Name = "tabPage4";
             this.tabPage4.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage4.Size = new System.Drawing.Size(1140, 683);
-            this.tabPage4.TabIndex = 3;
+            this.tabPage4.TabIndex = 4;
             this.tabPage4.Text = "日志配置";
             this.tabPage4.UseVisualStyleBackColor = true;
             // 
@@ -216,7 +229,7 @@
             this.tabPage5.Name = "tabPage5";
             this.tabPage5.Padding = new System.Windows.Forms.Padding(4);
             this.tabPage5.Size = new System.Drawing.Size(1140, 683);
-            this.tabPage5.TabIndex = 4;
+            this.tabPage5.TabIndex = 5;
             this.tabPage5.Text = "高级配置";
             this.tabPage5.UseVisualStyleBackColor = true;
             // 
@@ -444,6 +457,7 @@
         #endregion
 
         private System.Windows.Forms.TabControl tabControl1;
+        private System.Windows.Forms.TabPage tabPageBasicSettings;
         private System.Windows.Forms.TabPage tabPage1;
         private System.Windows.Forms.TabPage tabPage2;
         private System.Windows.Forms.TabPage tabPage3;
