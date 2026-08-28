@@ -36,6 +36,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private bool _configurationLoaded;
         private bool _configurationHasUnsavedEdits;
         private bool _basicConfigurationHasUnsavedEdits;
+        private CancellationTokenSource _databaseConnectionTestCancellation;
         private bool _reloadingConfiguration;
 
         public ConfigForm()
@@ -71,6 +72,7 @@ namespace MachineDataAcquisitionSystem.Forms
             menuDelete.Click += menuDelete_Click;
             menuSetPrimary.Click += MenuSetPrimary_Click;
             menuTestConn.Click += btnTestConn_Click;
+            FormClosed += (sender, args) => _databaseConnectionTestCancellation?.Cancel();
         }
 
         private void InitializeBasicSettingsEditor()
@@ -693,7 +695,7 @@ namespace MachineDataAcquisitionSystem.Forms
 
 
 
-        private void btnTestConn_Click(object sender, EventArgs e)
+        private async void btnTestConn_Click(object sender, EventArgs e)
         {
             if (_currentDatabase == null)
             {
@@ -702,25 +704,51 @@ namespace MachineDataAcquisitionSystem.Forms
             }
 
             UpdateDbStatus("正在测试连接...", Color.Blue);
-
-            string connStr = _currentDatabase.GetConnectionString();
-            bool success = DatabaseConnectionTester.TryOpen(
-                _currentDatabase.DbType,
-                connStr,
-                out string error);
-
-            _currentDatabase.LastTestTime = DateTime.Now;
-            _currentDatabase.LastTestResult = success;
-            RefreshDatabaseList();
-
-            if (success)
+            menuTestConn.Enabled = false;
+            _databaseConnectionTestCancellation?.Cancel();
+            _databaseConnectionTestCancellation?.Dispose();
+            var testCancellation = new CancellationTokenSource();
+            _databaseConnectionTestCancellation = testCancellation;
+            try
             {
-                UpdateDbStatus("连接成功！", Color.Green);
+                string connStr = _currentDatabase.GetConnectionString();
+                DatabaseConnectionTestResult result = await DatabaseConnectionTester.TryOpenAsync(
+                    _currentDatabase.DbType,
+                    connStr,
+                    testCancellation.Token);
+
+                _currentDatabase.LastTestTime = DateTime.Now;
+                _currentDatabase.LastTestResult = result.IsSuccess;
+                RefreshDatabaseList();
+
+                if (result.IsSuccess)
+                {
+                    UpdateDbStatus("连接成功！", Color.Green);
+                }
+                else
+                {
+                    UpdateDbStatus(result.TimedOut ? "连接超时" : "连接失败", Color.Red);
+                    MessageBox.Show(
+                        result.Error ?? "连接失败，请检查配置。",
+                        "数据库连接测试",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
             }
-            else
+            catch (OperationCanceledException)
             {
-                UpdateDbStatus("连接失败", Color.Red);
-                MessageBox.Show(error ?? "连接失败，请检查配置。", "数据库连接测试", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (!IsDisposed && !Disposing)
+                    UpdateDbStatus("连接测试已取消", Color.DarkOrange);
+            }
+            finally
+            {
+                if (!IsDisposed && !Disposing)
+                    menuTestConn.Enabled = true;
+                if (ReferenceEquals(_databaseConnectionTestCancellation, testCancellation))
+                {
+                    _databaseConnectionTestCancellation = null;
+                    testCancellation.Dispose();
+                }
             }
         }
 
@@ -737,6 +765,8 @@ namespace MachineDataAcquisitionSystem.Forms
                 DatabaseConfigurationRules.ConnectionStringShouldBeRegenerated(propertyName))
             {
                 _currentDatabase.ConnectionString = "";
+                DatabaseConfigurationRules.InvalidateConnectionTest(_currentDatabase);
+                RefreshDatabaseList();
             }
             if (_currentDatabase != null &&
                 propertyName == "IsPrimary" &&

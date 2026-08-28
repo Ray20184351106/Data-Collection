@@ -1,6 +1,7 @@
 using MachineDataAcquisitionSystem.Core;
 using MachineDataAcquisitionSystem.Models;
 using System.Collections.Generic;
+using System;
 using Xunit;
 
 namespace MachineDataAcquisitionSystem.Tests
@@ -55,6 +56,21 @@ namespace MachineDataAcquisitionSystem.Tests
 
             Assert.Contains("不在当前配置", exception.Message);
             Assert.False(configured.IsPrimary);
+        }
+
+        [Fact]
+        public void Changing_connection_settings_invalidates_the_previous_test_result()
+        {
+            var database = new DatabaseConfig
+            {
+                LastTestResult = true,
+                LastTestTime = new DateTime(2026, 8, 28, 9, 30, 0)
+            };
+
+            DatabaseConfigurationRules.InvalidateConnectionTest(database);
+
+            Assert.False(database.LastTestResult);
+            Assert.Equal(default(DateTime), database.LastTestTime);
         }
     }
 }

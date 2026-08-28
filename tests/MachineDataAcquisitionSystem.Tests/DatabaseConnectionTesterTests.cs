@@ -2,6 +2,9 @@ using MachineDataAcquisitionSystem.Core;
 using System;
 using System.Data.SQLite;
 using System.IO;
+using System.Diagnostics;
+using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace MachineDataAcquisitionSystem.Tests
@@ -106,6 +109,86 @@ namespace MachineDataAcquisitionSystem.Tests
 
             Assert.False(connected);
             Assert.Contains("数据库名", error);
+        }
+
+        [Fact]
+        public async Task Async_connection_test_times_out_even_when_the_provider_probe_does_not_complete()
+        {
+            var neverCompletes = new TaskCompletionSource<bool>();
+            var stopwatch = Stopwatch.StartNew();
+
+            DatabaseConnectionTestResult result = await DatabaseConnectionTester.TryOpenAsync(
+                "SQL Server",
+                "Server=localhost;Database=FileAcquisitionDemo;Integrated Security=True;",
+                TimeSpan.FromMilliseconds(50),
+                CancellationToken.None,
+                (databaseType, connectionString, cancellationToken) => neverCompletes.Task);
+
+            stopwatch.Stop();
+            Assert.False(result.IsSuccess);
+            Assert.True(result.TimedOut);
+            Assert.Contains("超时", result.Error);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        }
+
+        [Fact]
+        public async Task Async_connection_test_honors_user_cancellation()
+        {
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    DatabaseConnectionTester.TryOpenAsync(
+                        "SQL Server",
+                        "Server=localhost;Database=FileAcquisitionDemo;Integrated Security=True;",
+                        TimeSpan.FromSeconds(5),
+                        cancellation.Token,
+                        (databaseType, connectionString, cancellationToken) => Task.Delay(5000, cancellationToken)));
+            }
+        }
+
+        [Fact]
+        public async Task Async_connection_test_caps_the_provider_connection_timeout_without_changing_the_saved_value()
+        {
+            const string savedConnectionString =
+                "Server=localhost;Database=FileAcquisitionDemo;Integrated Security=True;Connect Timeout=30;";
+            string effectiveConnectionString = null;
+
+            DatabaseConnectionTestResult result = await DatabaseConnectionTester.TryOpenAsync(
+                "SQL Server",
+                savedConnectionString,
+                TimeSpan.FromSeconds(5),
+                CancellationToken.None,
+                (databaseType, connectionString, cancellationToken) =>
+                {
+                    effectiveConnectionString = connectionString;
+                    return Task.CompletedTask;
+                });
+
+            Assert.True(result.IsSuccess, result.Error);
+            Assert.Contains("Connect Timeout=5", effectiveConnectionString);
+            Assert.Contains("Connect Timeout=30", savedConnectionString);
+        }
+
+        [Fact]
+        public async Task Async_connection_test_replaces_an_infinite_provider_timeout_with_the_test_limit()
+        {
+            string effectiveConnectionString = null;
+
+            DatabaseConnectionTestResult result = await DatabaseConnectionTester.TryOpenAsync(
+                "SQL Server",
+                "Server=localhost;Database=FileAcquisitionDemo;Integrated Security=True;Connect Timeout=0;",
+                TimeSpan.FromSeconds(5),
+                CancellationToken.None,
+                (databaseType, connectionString, cancellationToken) =>
+                {
+                    effectiveConnectionString = connectionString;
+                    return Task.CompletedTask;
+                });
+
+            Assert.True(result.IsSuccess, result.Error);
+            Assert.Contains("Connect Timeout=5", effectiveConnectionString);
         }
     }
 }

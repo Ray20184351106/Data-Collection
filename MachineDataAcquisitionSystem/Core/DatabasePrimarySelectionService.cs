@@ -21,6 +21,13 @@ namespace MachineDataAcquisitionSystem.Core
         {
             return !string.IsNullOrWhiteSpace(propertyName) && ConnectionProperties.Contains(propertyName);
         }
+
+        public static void InvalidateConnectionTest(DatabaseConfig database)
+        {
+            if (database == null) throw new ArgumentNullException(nameof(database));
+            database.LastTestResult = false;
+            database.LastTestTime = default(DateTime);
+        }
     }
 
     public static class DatabasePrimarySelectionService

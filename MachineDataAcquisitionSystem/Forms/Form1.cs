@@ -25,6 +25,7 @@ namespace MachineDataAcquisitionSystem
         //配置类
         private List<MachineConfig> _machineConfigs;
         private RemoteAgentBridge _remoteAgentBridge;
+        private PendingUploadStore _pendingUploadStore;
 
         // 队列统计
         private int _queueLength = 0;
@@ -113,6 +114,9 @@ namespace MachineDataAcquisitionSystem
 
             // 初始化日志写入线程
             InitLogDbWriter();
+            InitFileLogWriter();
+
+            _pendingUploadStore = new PendingUploadStore(DatabaseHelper.GetConnectionString());
 
             // 初始化批量插入
             InitBatchInsert();
@@ -120,7 +124,6 @@ namespace MachineDataAcquisitionSystem
             InitLogFlusher(); 
 
             InitQueueRefreshTimer(); 
-            InitLogFlusher();     
 
 
             // 初始化队列统计
@@ -952,8 +955,13 @@ namespace MachineDataAcquisitionSystem
                                 cancellationToken.ThrowIfCancellationRequested();
                                 await FillDefaultValues(detail);
                             }
-                            MasterDetailPersistenceResult result = await SaveMasterDetailToServerDatabase(
-                                masterDetail,
+                            Guid pendingMasterDetailId = _pendingUploadStore.Enqueue(
+                                machineId,
+                                filePath,
+                                script.ModelId);
+                            MasterDetailPersistenceResult result = await ExecuteDatabaseOperationWithRetryAsync(
+                                pendingMasterDetailId,
+                                () => SaveMasterDetailToServerDatabase(masterDetail, cancellationToken),
                                 cancellationToken);
                             masterDetailCommitted = true;
                             AddLog(
@@ -968,7 +976,12 @@ namespace MachineDataAcquisitionSystem
                         cancellationToken.ThrowIfCancellationRequested();
                         if (masterDetail == null)
                         {
-                            batchItems = AddBatchGroup(machineId, script.ModelId, models, cancellationToken);
+                            batchItems = AddBatchGroup(
+                                machineId,
+                                script.ModelId,
+                                filePath,
+                                models,
+                                cancellationToken);
                             AddLog($"[机台{machineId}] {batchItems.Count} 条数据已作为同一文件批次加入队列", LogLevel.Success);
                         }
                         //if (!saveSuccess)
@@ -1005,6 +1018,9 @@ namespace MachineDataAcquisitionSystem
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     MarkBatchGroupReady(batchItems, cancellationToken);
+                    UpdateQueueStatus(machineId, fileName, "等待数据库提交", 95);
+                    await WaitForBatchGroupPersistenceAsync(batchItems, cancellationToken);
+                    AddLog($"[机台{machineId}] 数据库事务已提交", LogLevel.Success);
                 }
                 try
                 {
@@ -1092,7 +1108,7 @@ namespace MachineDataAcquisitionSystem
         /// <summary>
         /// 补全基类字段默认值
         /// </summary>
-        private async Task FillDefaultValues(object model)
+        private Task FillDefaultValues(object model)
         {
             try
             {
@@ -1145,6 +1161,7 @@ namespace MachineDataAcquisitionSystem
             {
                 AddLog($"补全默认值失败: {ex.Message}", LogLevel.Error);
             }
+            return Task.CompletedTask;
         }
 
         private void InitializeTrayIcon()
@@ -1235,6 +1252,63 @@ namespace MachineDataAcquisitionSystem
             }
         }
 
+        private async Task<T> ExecuteDatabaseOperationWithRetryAsync<T>(
+            Guid pendingUploadId,
+            Func<Task<T>> operation,
+            CancellationToken cancellationToken)
+        {
+            int attempt = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                T result;
+                try
+                {
+                    result = await operation();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    attempt++;
+                    if (!DatabaseRetryPolicy.IsTransient(ex))
+                    {
+                        _pendingUploadStore.RecordPermanentFailure(pendingUploadId, attempt, ex.Message);
+                        throw new InvalidOperationException(
+                            "数据库入库失败，错误不可自动重试：" + ex.Message,
+                            ex);
+                    }
+
+                    TimeSpan delay = DatabaseRetryPolicy.GetDelay(attempt);
+                    DateTime nextAttemptAt = DateTime.Now.Add(delay);
+                    _pendingUploadStore.RecordTransientFailure(
+                        pendingUploadId,
+                        attempt,
+                        nextAttemptAt,
+                        ex.Message);
+                    AddLog(
+                        $"数据库暂时不可用，第 {attempt} 次失败，将在 {delay.TotalSeconds:0} 秒后重试: {ex.Message}",
+                        LogLevel.Warning);
+                    await Task.Delay(delay, cancellationToken);
+                    continue;
+                }
+
+                try
+                {
+                    _pendingUploadStore.Complete(pendingUploadId);
+                }
+                catch (Exception cleanupException)
+                {
+                    AddLog(
+                        "数据库已提交，但清理本地待入库状态失败: " + cleanupException.Message,
+                        LogLevel.Warning);
+                }
+                return result;
+            }
+        }
+
         /// <summary>
         /// 保存数据到服务器数据库
         /// </summary>
@@ -1306,8 +1380,6 @@ namespace MachineDataAcquisitionSystem
                 string connectionString = primaryDb.GetConnectionString();
 
                 AddLog($"使用主数据库: {primaryDb.Name}", LogLevel.Info);
-                AddLog($"连接字符串: {connectionString}", LogLevel.Info);
-
                 if (string.IsNullOrEmpty(connectionString))
                 {
                     AddLog("主数据库连接字符串为空", LogLevel.Error);
@@ -1470,6 +1542,14 @@ namespace MachineDataAcquisitionSystem
         // 添加日志写入队列
         private static BlockingCollection<ProcessRecordWrite> _logDbQueue = new BlockingCollection<ProcessRecordWrite>();
         private Task _logDbWriterTask;
+        private sealed class FileLogWrite
+        {
+            public DateTime Timestamp { get; set; }
+            public string Text { get; set; }
+        }
+        private readonly BlockingCollection<FileLogWrite> _fileLogQueue =
+            new BlockingCollection<FileLogWrite>(10000);
+        private Task _fileLogWriterTask;
 
         // 在构造函数中启动后台写入线程
         private void InitLogDbWriter()
@@ -1506,6 +1586,29 @@ VALUES
                         {
                             System.Diagnostics.Debug.WriteLine($"日志写入失败: {ex.Message}");
                         }
+                    }
+                }
+            });
+        }
+
+        private void InitFileLogWriter()
+        {
+            _fileLogWriterTask = Task.Run(() =>
+            {
+                foreach (FileLogWrite record in _fileLogQueue.GetConsumingEnumerable())
+                {
+                    try
+                    {
+                        string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+                        Directory.CreateDirectory(logDir);
+                        string logFilePath = Path.Combine(
+                            logDir,
+                            record.Timestamp.ToString("yyyy-MM-dd") + ".log");
+                        File.AppendAllText(logFilePath, record.Text);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine("写入日志文件失败: " + ex.Message);
                     }
                 }
             });
@@ -1846,6 +1949,7 @@ VALUES
         private object _logLock = new object();
         private Timer _logFlushTimer;
         private bool _isFlushing = false;
+        private const int MaximumVisibleLogCharacters = 200000;
 
         // 在构造函数中初始化
         private void InitLogFlusher()
@@ -1865,22 +1969,10 @@ VALUES
             string logText = $"[{time}] [{prefix}] {message}\r\n";
             string fileLogText = $"[{time}] [{prefix}] {message}{Environment.NewLine}";
 
-            // ========== 保存到文件（异步） ==========
-            Task.Run(() =>
+            _fileLogQueue.TryAdd(new FileLogWrite
             {
-                try
-                {
-                    string logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
-                    if (!Directory.Exists(logDir))
-                        Directory.CreateDirectory(logDir);
-
-                    string logFilePath = Path.Combine(logDir, $"{DateTime.Now:yyyy-MM-dd}.log");
-                    File.AppendAllText(logFilePath, fileLogText);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"写入日志文件失败: {ex.Message}");
-                }
+                Timestamp = DateTime.Now,
+                Text = fileLogText
             });
 
             // ========== 加入界面显示队列 ==========
@@ -1917,6 +2009,7 @@ VALUES
                         {
                             richTextBox1.AppendText(logText);
                         }
+                        TrimVisibleLogs();
                         richTextBox1.ScrollToCaret();
                     }));
                 }
@@ -1926,6 +2019,7 @@ VALUES
                     {
                         richTextBox1.AppendText(logText);
                     }
+                    TrimVisibleLogs();
                     richTextBox1.ScrollToCaret();
                 }
             }
@@ -2043,11 +2137,15 @@ VALUES
         private class BatchItem
         {
             public Guid FileGroupId { get; set; }
+            public Guid PendingUploadId { get; set; }
             public int MachineId { get; set; }
             public int ModelId { get; set; }
             public object Model { get; set; }
             public CancellationToken CancellationToken { get; set; }
             public bool IsReadyToPersist { get; set; }
+            public int AttemptCount { get; set; }
+            public DateTime NextAttemptAt { get; set; }
+            public UploadCommitSignal CommitSignal { get; set; }
         }
 
         private List<BatchItem> _batchDataList = new List<BatchItem>();
@@ -2064,10 +2162,9 @@ VALUES
         {
             _batchTimer = new Timer();
             _batchTimer.Interval = _batchInterval;
-            _batchTimer.Tick += async (s, e) =>
+            _batchTimer.Tick += (s, e) =>
             {
-                // 静默刷新，不打印日志
-                await FlushBatchAsync(silent: true);
+                Task.Run(() => FlushBatchAsync());
             };
             _batchTimer.Start();
             // 只打印一次启动日志
@@ -2080,6 +2177,7 @@ VALUES
         private IReadOnlyList<BatchItem> AddBatchGroup(
             int machineId,
             int modelId,
+            string filePath,
             IReadOnlyList<object> models,
             CancellationToken cancellationToken)
         {
@@ -2090,20 +2188,35 @@ VALUES
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 Guid fileGroupId = Guid.NewGuid();
+                Guid pendingUploadId = _pendingUploadStore.Enqueue(machineId, filePath, modelId);
+                var commitSignal = new UploadCommitSignal();
                 var batchItems = models.Select(model => new BatchItem
                 {
                     FileGroupId = fileGroupId,
+                    PendingUploadId = pendingUploadId,
                     MachineId = machineId,
                     ModelId = modelId,
                     Model = model ?? throw new InvalidOperationException("同一文件批次中包含空记录。"),
                     CancellationToken = cancellationToken,
-                    IsReadyToPersist = false
+                    IsReadyToPersist = false,
+                    AttemptCount = 0,
+                    NextAttemptAt = DateTime.Now,
+                    CommitSignal = commitSignal
                 }).ToList();
 
                 _batchDataList.AddRange(batchItems);
                 AddLog($"加入文件批次 {fileGroupId:N}，批次 {batchItems.Count} 条，当前队列长度: {_batchDataList.Count}", LogLevel.Info);
                 return batchItems;
             }
+        }
+
+        private static Task WaitForBatchGroupPersistenceAsync(
+            IReadOnlyList<BatchItem> batchItems,
+            CancellationToken cancellationToken)
+        {
+            if (batchItems == null || batchItems.Count == 0)
+                return Task.CompletedTask;
+            return batchItems[0].CommitSignal.WaitAsync(cancellationToken);
         }
 
         private void MarkBatchGroupReady(IReadOnlyList<BatchItem> batchItems, CancellationToken cancellationToken)
@@ -2126,7 +2239,7 @@ VALUES
                 if (readyCount >= _batchSize)
                 {
                     AddLog($"可入库数据达到批量阈值 {_batchSize}，触发批量插入", LogLevel.Info);
-                    Task.Run(async () => await FlushBatchAsync());
+                    Task.Run(() => FlushBatchAsync());
                 }
             }
         }
@@ -2160,20 +2273,25 @@ VALUES
         /// <summary>
         /// 批量插入数据库
         /// </summary>
-        private async Task FlushBatchAsync(bool silent = false)
+        private async Task FlushBatchAsync(bool waitForGate = false)
         {
-            if (!await _batchFlushGate.WaitAsync(0)) return;
+            if (waitForGate)
+                await _batchFlushGate.WaitAsync();
+            else if (!await _batchFlushGate.WaitAsync(0))
+                return;
 
             List<BatchItem> dataToSave = null;
+            bool transactionCommitted = false;
             try
             {
                 lock (_batchLock)
                 {
                     _batchDataList.RemoveAll(
                         x => !x.IsReadyToPersist && x.CancellationToken.IsCancellationRequested);
-                    dataToSave = _batchDataList.Where(x => x.IsReadyToPersist).ToList();
+                    dataToSave = SelectDueBatchItems(DateTime.Now);
                     if (dataToSave.Count == 0) return;
-                    _batchDataList.RemoveAll(x => x.IsReadyToPersist);
+                    var selected = new HashSet<BatchItem>(dataToSave);
+                    _batchDataList.RemoveAll(selected.Contains);
                     AddLog($"准备批量插入 {dataToSave.Count} 条数据", LogLevel.Info);
                 }
 
@@ -2237,6 +2355,7 @@ VALUES
                         }
 
                         db.Ado.CommitTran();
+                        transactionCommitted = true;
                         AddLog($"批量事务提交成功，影响行数: {insertedRows}", LogLevel.Success);
                     }
                     catch
@@ -2245,23 +2364,152 @@ VALUES
                         throw;
                     }
                 }
+
+                CompleteBatchGroups(dataToSave);
             }
             catch (Exception ex)
             {
-                AddLog($"批量插入失败: {ex.Message}", LogLevel.Error);
-
-                if (dataToSave != null)
+                if (transactionCommitted)
                 {
-                    // 事务失败时整批重新排队，避免部分提交或数据丢失。
-                    lock (_batchLock)
-                    {
-                        _batchDataList.InsertRange(0, dataToSave);
-                    }
+                    AddLog("数据库已提交，但清理本地待入库状态失败: " + ex.Message, LogLevel.Warning);
+                    MarkBatchGroupsCommitted(dataToSave);
+                }
+                else
+                {
+                    HandleBatchFailure(dataToSave, ex);
                 }
             }
             finally
             {
                 _batchFlushGate.Release();
+            }
+        }
+
+        private void TrimVisibleLogs()
+        {
+            int removalLength = LogRetentionPolicy.GetRemovalLength(
+                richTextBox1.TextLength,
+                MaximumVisibleLogCharacters);
+            if (removalLength <= 0) return;
+            richTextBox1.Select(0, removalLength);
+            richTextBox1.SelectedText = string.Empty;
+            richTextBox1.SelectionStart = richTextBox1.TextLength;
+        }
+
+        private List<BatchItem> SelectDueBatchItems(DateTime now)
+        {
+            var selected = new List<BatchItem>();
+            var dueGroups = _batchDataList
+                .Where(item => item.IsReadyToPersist &&
+                               !item.CancellationToken.IsCancellationRequested &&
+                               item.NextAttemptAt <= now)
+                .GroupBy(item => item.FileGroupId)
+                .OrderBy(group => group.Min(item => item.NextAttemptAt));
+            foreach (var group in dueGroups)
+            {
+                List<BatchItem> items = group.ToList();
+                if (selected.Count > 0 && selected.Count + items.Count > _batchSize)
+                    break;
+                selected.AddRange(items);
+                if (selected.Count >= _batchSize)
+                    break;
+            }
+            return selected;
+        }
+
+        private void CompleteBatchGroups(IReadOnlyList<BatchItem> batchItems)
+        {
+            if (batchItems == null) return;
+            foreach (var group in batchItems.GroupBy(item => item.FileGroupId))
+            {
+                BatchItem first = group.First();
+                try
+                {
+                    _pendingUploadStore.Complete(first.PendingUploadId);
+                }
+                catch (Exception ex)
+                {
+                    AddLog("清理本地待入库记录失败: " + ex.Message, LogLevel.Warning);
+                }
+                first.CommitSignal.MarkCommitted();
+            }
+        }
+
+        private static void MarkBatchGroupsCommitted(IReadOnlyList<BatchItem> batchItems)
+        {
+            if (batchItems == null) return;
+            foreach (var group in batchItems.GroupBy(item => item.FileGroupId))
+                group.First().CommitSignal.MarkCommitted();
+        }
+
+        private void HandleBatchFailure(IReadOnlyList<BatchItem> batchItems, Exception exception)
+        {
+            if (batchItems == null || batchItems.Count == 0)
+            {
+                AddLog("批量插入失败: " + exception.Message, LogLevel.Error);
+                return;
+            }
+
+            bool transient = DatabaseRetryPolicy.IsTransient(exception);
+            var retryItems = new List<BatchItem>();
+            foreach (var group in batchItems.GroupBy(item => item.FileGroupId))
+            {
+                List<BatchItem> items = group.ToList();
+                BatchItem first = items[0];
+                int attempt = items.Max(item => item.AttemptCount) + 1;
+                if (transient)
+                {
+                    TimeSpan delay = DatabaseRetryPolicy.GetDelay(attempt);
+                    DateTime nextAttemptAt = DateTime.Now.Add(delay);
+                    foreach (BatchItem item in items)
+                    {
+                        item.AttemptCount = attempt;
+                        item.NextAttemptAt = nextAttemptAt;
+                    }
+                    try
+                    {
+                        _pendingUploadStore.RecordTransientFailure(
+                            first.PendingUploadId,
+                            attempt,
+                            nextAttemptAt,
+                            exception.Message);
+                    }
+                    catch (Exception storeException)
+                    {
+                        AddLog("记录数据库重试状态失败: " + storeException.Message, LogLevel.Warning);
+                    }
+                    if (!items.Any(item => item.CancellationToken.IsCancellationRequested))
+                        retryItems.AddRange(items);
+                    AddLog(
+                        $"数据库暂时不可用，第 {attempt} 次失败，将在 {delay.TotalSeconds:0} 秒后重试: {exception.Message}",
+                        LogLevel.Warning);
+                }
+                else
+                {
+                    try
+                    {
+                        _pendingUploadStore.RecordPermanentFailure(
+                            first.PendingUploadId,
+                            attempt,
+                            exception.Message);
+                    }
+                    catch (Exception storeException)
+                    {
+                        AddLog("记录永久入库错误失败: " + storeException.Message, LogLevel.Warning);
+                    }
+                    first.CommitSignal.MarkPermanentFailure(new InvalidOperationException(
+                        "数据库入库失败，错误不可自动重试：" + exception.Message,
+                        exception));
+                    AddLog("批量插入永久失败，已停止自动重试: " + exception.Message, LogLevel.Error);
+                }
+            }
+
+            if (retryItems.Count > 0)
+            {
+                lock (_batchLock)
+                {
+                    _batchDataList.AddRange(retryItems);
+                }
             }
         }
 
@@ -2271,7 +2519,7 @@ VALUES
         private async Task FlushRemainingData()
         {
             _batchTimer?.Stop();
-            await FlushBatchAsync();
+            await FlushBatchAsync(waitForGate: true);
         }
 
         protected override async void OnFormClosing(FormClosingEventArgs e)
@@ -2303,12 +2551,27 @@ VALUES
                     _logDbQueue.CompleteAdding();
                 if (_logDbWriterTask != null)
                     await _logDbWriterTask;
+                if (!_fileLogQueue.IsAddingCompleted)
+                    _fileLogQueue.CompleteAdding();
+                if (_fileLogWriterTask != null)
+                    await _fileLogWriterTask;
 
                 if (_batchTimer != null)
                 {
                     _batchTimer.Stop();
                     _batchTimer.Dispose();
                 }
+                if (_logFlushTimer != null)
+                {
+                    _logFlushTimer.Stop();
+                    _logFlushTimer.Dispose();
+                }
+                if (_queueRefreshTimer != null)
+                {
+                    _queueRefreshTimer.Stop();
+                    _queueRefreshTimer.Dispose();
+                }
+                _pendingUploadStore?.Dispose();
             }
             catch (Exception ex)
             {

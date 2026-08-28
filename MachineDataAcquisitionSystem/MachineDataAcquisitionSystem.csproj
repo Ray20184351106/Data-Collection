@@ -173,15 +173,18 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Core\DatabaseConnectionTester.cs" />
+    <Compile Include="Core\DatabaseRetryPolicy.cs" />
     <Compile Include="Core\DatabasePrimarySelectionService.cs" />
     <Compile Include="Core\DynamicBaseEntityBuilder.cs" />
     <Compile Include="Core\FileParser.cs" />
     <Compile Include="Core\FileWatcher.cs" />
+    <Compile Include="Core\LogRetentionPolicy.cs" />
     <Compile Include="Core\Machine.cs" />
     <Compile Include="Core\MachineManager.cs" />
     <Compile Include="Core\ModelCatalogService.cs" />
     <Compile Include="Core\ModelExcelImportService.cs" />
     <Compile Include="Core\ModelIdentityInitializer.cs" />
+    <Compile Include="Core\PendingUploadStore.cs" />
     <Compile Include="Core\MasterDetailPersistenceService.cs" />
     <Compile Include="Core\ModelTableMapping.cs" />
     <Compile Include="Core\TargetTableProvisioner.cs" />
@@ -211,6 +214,7 @@
     <Compile Include="Core\ScriptMatcher.cs" />
     <Compile Include="Core\StartupRegistrationService.cs" />
     <Compile Include="Core\TrayClosePolicy.cs" />
+    <Compile Include="Core\UploadCommitSignal.cs" />
     <Compile Include="Data\IDataRepository.cs" />
     <Compile Include="Data\MockRepository.cs" />
     <Compile Include="Forms\BaseFieldConfigForm.cs">
