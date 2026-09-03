@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Acquisition.Agent.Services;
 using Acquisition.Agent.Storage;
 using Acquisition.Contracts;
@@ -35,12 +36,16 @@ public sealed class AgentWorker(
 
     private async Task SendHeartbeatAsync(CancellationToken cancellationToken)
     {
+        var devices = await store.GetDeviceStatusesAsync(cancellationToken);
+        var databaseHealthy = await store.CheckHealthAsync(cancellationToken);
+        var applied = await store.GetAppliedConfigStateAsync(cancellationToken);
         var heartbeat = new AgentHeartbeat
         {
             AgentId = options.AgentId, RequestId = Guid.NewGuid(), TimestampUtc = DateTimeOffset.UtcNow,
             ComputerName = Environment.MachineName, AgentVersion = typeof(AgentWorker).Assembly.GetName().Version?.ToString() ?? "1.0.0",
             Site = options.Site, PendingUploadCount = await store.CountPendingRecordsAsync(cancellationToken),
-            LocalDatabaseHealthy = true, Devices = await store.GetDeviceStatusesAsync(cancellationToken)
+            LocalDatabaseHealthy = databaseHealthy, Devices = devices,
+            Diagnostics = BuildDiagnostics(databaseHealthy, devices, applied)
         };
         await center.SendHeartbeatAsync(heartbeat, cancellationToken);
     }
@@ -92,12 +97,60 @@ public sealed class AgentWorker(
         {
             var result = await configs.ApplyAsync(package, cancellationToken);
             var state = result.IsValid ? ConfigApplyState.Applied : ConfigApplyState.RolledBack;
+            var effective = await store.GetAppliedConfigStateAsync(cancellationToken);
             await center.AcknowledgeConfigAsync(new ConfigApplyResult
             {
                 AgentId = options.AgentId, RequestId = Guid.NewGuid(), AssignmentId = package.AssignmentId,
                 State = state, TimestampUtc = DateTimeOffset.UtcNow,
-                Message = result.IsValid ? "配置已原子应用。" : string.Join("; ", result.Errors)
+                Message = result.IsValid ? "配置已原子应用。" : string.Join("; ", result.Errors),
+                EffectiveVersion = effective.Version,
+                EffectiveSha256 = effective.Sha256,
+                EffectiveObservedAtUtc = effective.UpdatedAtUtc
             }, cancellationToken);
         }
     }
+
+    private AgentRuntimeDiagnostics BuildDiagnostics(
+        bool databaseHealthy, IReadOnlyCollection<DeviceRuntimeStatus> devices, AppliedConfigState applied)
+    {
+        bool? winFormsRunning = null;
+        if (!string.IsNullOrWhiteSpace(options.LegacyExecutablePath))
+        {
+            var processName = Path.GetFileNameWithoutExtension(options.LegacyExecutablePath);
+            var processes = Process.GetProcessesByName(processName);
+            try { winFormsRunning = processes.Length > 0; }
+            finally { foreach (var process in processes) process.Dispose(); }
+        }
+        DateTimeOffset? processStartedAtUtc = null;
+        string? processPath = null;
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            processStartedAtUtc = process.StartTime.ToUniversalTime();
+            processPath = Environment.ProcessPath;
+        }
+        catch { /* 诊断字段未知不能影响心跳。 */ }
+        return new AgentRuntimeDiagnostics
+        {
+            ObservedAtUtc = DateTimeOffset.UtcNow,
+            IsWindowsService = Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService(),
+            ProcessStartedAtUtc = processStartedAtUtc,
+            ProcessPath = processPath,
+            LocalDatabasePath = options.LocalDatabasePath,
+            LocalDatabaseState = databaseHealthy ? DiagnosticHealthState.Healthy : DiagnosticHealthState.Unhealthy,
+            LegacyDatabasePath = NullIfBlank(options.LegacyDatabasePath),
+            LegacyDatabaseExists = FileState(options.LegacyDatabasePath),
+            LegacyConfigPath = NullIfBlank(options.LegacyConfigPath),
+            LegacyConfigExists = FileState(options.LegacyConfigPath),
+            LegacyExecutablePath = NullIfBlank(options.LegacyExecutablePath),
+            WinFormsProcessRunning = winFormsRunning,
+            WinFormsLastSeenAtUtc = devices.Select(x => x.ObservedAtUtc).Where(x => x.HasValue).Max(),
+            EffectiveConfigVersion = applied.Version,
+            EffectiveConfigSha256 = applied.Sha256,
+            LastErrorSummary = devices.Select(x => x.LastError).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))
+        };
+    }
+
+    private static bool? FileState(string? path) => string.IsNullOrWhiteSpace(path) ? null : File.Exists(path);
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
 }

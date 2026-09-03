@@ -26,6 +26,7 @@ public sealed class DeviceStatusEntity
     public int TodayFailure { get; set; }
     public DateTimeOffset? LastProcessedAtUtc { get; set; }
     public string? LastError { get; set; }
+    public DateTimeOffset? ObservedAtUtc { get; set; }
 }
 
 public sealed class ProcessedRequestEntity
@@ -75,6 +76,10 @@ public sealed class ConfigVersionEntity
     public string MinimumAgentVersion { get; set; } = "1.0.0";
     public string PayloadJson { get; set; } = "{}";
     public string Sha256 { get; set; } = "";
+    public Guid? RequestId { get; set; }
+    public string PreviewSha256 { get; set; } = "";
+    public string? Reason { get; set; }
+    public Guid? RollbackSourceVersionId { get; set; }
     public ConfigLifecycleState State { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public string CreatedBy { get; set; } = "";
@@ -89,6 +94,9 @@ public sealed class ConfigAssignmentEntity
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? AcknowledgedAtUtc { get; set; }
     public string? Message { get; set; }
+    public int? EffectiveVersion { get; set; }
+    public string? EffectiveSha256 { get; set; }
+    public DateTimeOffset? EffectiveObservedAtUtc { get; set; }
     public ConfigVersionEntity ConfigVersion { get; set; } = null!;
 }
 

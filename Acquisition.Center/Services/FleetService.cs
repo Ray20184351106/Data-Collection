@@ -26,6 +26,14 @@ public sealed class FleetService(CenterDbContext db)
         agent.PendingUploadCount = heartbeat.PendingUploadCount;
         agent.LocalDatabaseHealthy = heartbeat.LocalDatabaseHealthy;
 
+        var deployment = await db.AgentDeployments.SingleOrDefaultAsync(x => x.AgentId == heartbeat.AgentId, cancellationToken);
+        if (deployment is not null)
+        {
+            deployment.FirstHeartbeatAtUtc ??= heartbeat.TimestampUtc;
+            deployment.LastHeartbeatAtUtc = heartbeat.TimestampUtc;
+            deployment.State = AgentDeploymentLifecycleState.Online;
+        }
+
         foreach (var status in heartbeat.Devices)
         {
             var device = await db.DeviceStatuses.SingleOrDefaultAsync(
@@ -42,6 +50,18 @@ public sealed class FleetService(CenterDbContext db)
             device.TodayFailure = status.TodayFailure;
             device.LastProcessedAtUtc = status.LastProcessedAtUtc;
             device.LastError = Truncate(status.LastError, 2000);
+            device.ObservedAtUtc = status.ObservedAtUtc;
+        }
+
+        if (heartbeat.Diagnostics is not null)
+        {
+            var snapshot = await db.AgentDiagnosticSnapshots.SingleOrDefaultAsync(x => x.AgentId == heartbeat.AgentId, cancellationToken);
+            if (snapshot is null)
+            {
+                snapshot = new AgentDiagnosticSnapshotEntity { AgentId = heartbeat.AgentId };
+                db.AgentDiagnosticSnapshots.Add(snapshot);
+            }
+            ApplyDiagnostics(snapshot, heartbeat.Diagnostics);
         }
 
         db.ProcessedRequests.Add(new ProcessedRequestEntity
@@ -152,6 +172,9 @@ public sealed class FleetService(CenterDbContext db)
         assignment.State = result.State;
         assignment.AcknowledgedAtUtc = result.TimestampUtc;
         assignment.Message = Truncate(result.Message, 2000);
+        assignment.EffectiveVersion = result.EffectiveVersion;
+        assignment.EffectiveSha256 = Truncate(result.EffectiveSha256, 64);
+        assignment.EffectiveObservedAtUtc = result.EffectiveObservedAtUtc;
         await db.SaveChangesAsync(cancellationToken);
         return true;
     }
@@ -164,6 +187,26 @@ public sealed class FleetService(CenterDbContext db)
 
     private static string? Truncate(string? value, int length) =>
         string.IsNullOrEmpty(value) || value.Length <= length ? value : value[..length];
+
+    private static void ApplyDiagnostics(AgentDiagnosticSnapshotEntity target, AgentRuntimeDiagnostics source)
+    {
+        target.ObservedAtUtc = source.ObservedAtUtc;
+        target.IsWindowsService = source.IsWindowsService;
+        target.ProcessStartedAtUtc = source.ProcessStartedAtUtc;
+        target.ProcessPath = Truncate(source.ProcessPath, 1000);
+        target.LocalDatabasePath = Truncate(source.LocalDatabasePath, 1000);
+        target.LocalDatabaseState = source.LocalDatabaseState;
+        target.LegacyDatabasePath = Truncate(source.LegacyDatabasePath, 1000);
+        target.LegacyDatabaseExists = source.LegacyDatabaseExists;
+        target.LegacyConfigPath = Truncate(source.LegacyConfigPath, 1000);
+        target.LegacyConfigExists = source.LegacyConfigExists;
+        target.LegacyExecutablePath = Truncate(source.LegacyExecutablePath, 1000);
+        target.WinFormsProcessRunning = source.WinFormsProcessRunning;
+        target.WinFormsLastSeenAtUtc = source.WinFormsLastSeenAtUtc;
+        target.EffectiveConfigVersion = source.EffectiveConfigVersion;
+        target.EffectiveConfigSha256 = Truncate(source.EffectiveConfigSha256, 64);
+        target.LastErrorSummary = Truncate(source.LastErrorSummary, 2000);
+    }
 
     private async Task EnsureAlertAsync(string agentId, string? deviceId, string code, string severity, string message, CancellationToken cancellationToken)
     {

@@ -164,14 +164,15 @@ public sealed class AgentLocalStore(string databasePath) : IAsyncDisposable
     {
         var statuses = new List<DeviceRuntimeStatus>();
         await using var connection = await OpenAsync(cancellationToken);
-        var command = connection.CreateCommand(); command.CommandText = "SELECT DeviceId,Name,State,QueueDepth,TodaySuccess,TodayFailure,LastProcessedAtUtc,LastError FROM LocalDeviceStatuses ORDER BY Name";
+        var command = connection.CreateCommand(); command.CommandText = "SELECT DeviceId,Name,State,QueueDepth,TodaySuccess,TodayFailure,LastProcessedAtUtc,LastError,UpdatedAtUtc FROM LocalDeviceStatuses ORDER BY Name";
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken)) statuses.Add(new DeviceRuntimeStatus
         {
             DeviceId = reader.GetString(0), Name = reader.GetString(1), State = (RuntimeState)reader.GetInt32(2),
             QueueDepth = reader.GetInt32(3), TodaySuccess = reader.GetInt32(4), TodayFailure = reader.GetInt32(5),
             LastProcessedAtUtc = reader.IsDBNull(6) ? null : DateTimeOffset.Parse(reader.GetString(6)),
-            LastError = reader.IsDBNull(7) ? null : reader.GetString(7)
+            LastError = reader.IsDBNull(7) ? null : reader.GetString(7),
+            ObservedAtUtc = reader.IsDBNull(8) ? null : DateTimeOffset.Parse(reader.GetString(8))
         });
         return statuses;
     }
@@ -191,6 +192,34 @@ public sealed class AgentLocalStore(string databasePath) : IAsyncDisposable
         command.Parameters.AddWithValue("$json", package.PayloadJson);
         command.Parameters.AddWithValue("$at", DateTimeOffset.UtcNow.ToString("O"));
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<AppliedConfigState> GetAppliedConfigStateAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT CurrentVersion,CurrentJson,UpdatedAtUtc FROM ConfigState WHERE Id=1";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return new AppliedConfigState();
+        return new AppliedConfigState
+        {
+            Version = reader.IsDBNull(0) ? null : reader.GetInt32(0),
+            PayloadJson = reader.IsDBNull(1) ? null : reader.GetString(1),
+            UpdatedAtUtc = reader.IsDBNull(2) ? null : DateTimeOffset.Parse(reader.GetString(2))
+        };
+    }
+
+    public async Task<bool> CheckHealthAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA quick_check(1);";
+            var result = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));
+            return string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (SqliteException) { return false; }
     }
 
     public async Task<long> GetLongMetaAsync(string key, CancellationToken cancellationToken)

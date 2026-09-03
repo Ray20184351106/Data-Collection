@@ -27,6 +27,7 @@ public sealed class AgentHeartbeat
     public int PendingUploadCount { get; set; }
     public bool LocalDatabaseHealthy { get; set; }
     public List<DeviceRuntimeStatus> Devices { get; set; } = new();
+    public AgentRuntimeDiagnostics? Diagnostics { get; set; }
 }
 
 public sealed class DeviceRuntimeStatus
@@ -39,6 +40,7 @@ public sealed class DeviceRuntimeStatus
     public int TodayFailure { get; set; }
     public DateTimeOffset? LastProcessedAtUtc { get; set; }
     public string? LastError { get; set; }
+    public DateTimeOffset? ObservedAtUtc { get; set; }
 }
 
 public sealed class CollectionRecordSummary
@@ -126,6 +128,9 @@ public sealed class ConfigApplyResult
     public ConfigApplyState State { get; set; }
     public DateTimeOffset TimestampUtc { get; set; }
     public string? Message { get; set; }
+    public int? EffectiveVersion { get; set; }
+    public string? EffectiveSha256 { get; set; }
+    public DateTimeOffset? EffectiveObservedAtUtc { get; set; }
 }
 
 public sealed record ValidationResult(bool IsValid, IReadOnlyList<string> Errors);

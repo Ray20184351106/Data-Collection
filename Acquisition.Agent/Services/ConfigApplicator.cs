@@ -6,71 +6,83 @@ namespace Acquisition.Agent.Services;
 
 public sealed class ConfigApplicator(AgentOptions options, AgentLocalStore store)
 {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public async Task<ValidationResult> ApplyAsync(ConfigPackage package, CancellationToken cancellationToken)
     {
         var result = package.Validate();
         if (!result.IsValid) return result;
-        var errors = new List<string>();
-        string machineJson;
+        if (Version.TryParse(package.MinimumAgentVersion, out var minimum)
+            && typeof(ConfigApplicator).Assembly.GetName().Version is { } current
+            && current < minimum)
+            return new ValidationResult(false, new[] { $"当前Agent版本 {current} 低于配置要求的 {minimum}。" });
+
+        MachineConfigurationDocument document;
         try
         {
-            using var document = JsonDocument.Parse(package.PayloadJson);
-            if (!document.RootElement.TryGetProperty("machines", out var machines) || machines.ValueKind != JsonValueKind.Array)
+            using var json = JsonDocument.Parse(package.PayloadJson);
+            if (!json.RootElement.TryGetProperty("machines", out var machines) || machines.ValueKind != JsonValueKind.Array)
                 return new ValidationResult(false, new[] { "配置必须包含machines数组。" });
-            foreach (var machine in machines.EnumerateArray())
-            {
-                foreach (var name in new[] { "monitorPath", "successPath", "errorPath" })
-                {
-                    if (!machine.TryGetProperty(name, out var path) || string.IsNullOrWhiteSpace(path.GetString()) || !Path.IsPathFullyQualified(path.GetString()!)) errors.Add($"{name}必须是绝对路径。");
-                }
-            }
-            machineJson = machines.GetRawText();
+            var parsed = JsonSerializer.Deserialize<List<ManagedMachineConfiguration>>(machines.GetRawText(), JsonOptions) ?? new();
+            document = MachineConfigurationDocument.Create(parsed);
         }
-        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        catch (JsonException)
         {
             return new ValidationResult(false, new[] { "配置结构无效。" });
         }
-        if (errors.Count > 0) return new ValidationResult(false, errors);
+        if (!document.IsValid) return new ValidationResult(false, document.Errors);
 
-        string? fullPath = null;
-        if (!string.IsNullOrWhiteSpace(options.LegacyConfigPath))
+        LegacyConfigFileTransaction? fileTransaction = null;
+        try
         {
-            fullPath = Path.GetFullPath(options.LegacyConfigPath);
-            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-            var temporary = fullPath + ".pending";
-            await File.WriteAllTextAsync(temporary, machineJson, cancellationToken);
-            if (File.Exists(fullPath)) File.Copy(fullPath, fullPath + ".previous", overwrite: true);
-            File.Move(temporary, fullPath, overwrite: true);
+            if (!string.IsNullOrWhiteSpace(options.LegacyConfigPath))
+            {
+                var machineJson = JsonSerializer.Serialize(document.Machines, JsonOptions);
+                fileTransaction = await LegacyConfigFileTransaction.StageAsync(options.LegacyConfigPath, machineJson, cancellationToken);
+            }
+
+            var applied = await ReloadAndWaitAsync(package.AssignmentId, cancellationToken);
+            if (applied.Succeeded)
+            {
+                if (fileTransaction is not null) await fileTransaction.CommitAsync();
+                await store.SaveAppliedConfigAsync(package, cancellationToken);
+                return new ValidationResult(true, Array.Empty<string>());
+            }
+
+            if (fileTransaction is not null) await fileTransaction.RollbackAsync(cancellationToken);
+            var restored = await ReloadAndWaitAsync(Guid.NewGuid(), cancellationToken);
+            var message = restored.Succeeded
+                ? applied.Message ?? "本地采集程序拒绝新配置，上一状态已恢复并重新加载。"
+                : $"新配置应用失败；文件已恢复，但本地采集程序未确认恢复结果：{restored.Message}";
+            return new ValidationResult(false, new[] { message });
         }
+        finally
+        {
+            if (fileTransaction is not null) await fileTransaction.DisposeAsync();
+        }
+    }
+
+    private async Task<(bool Succeeded, string? Message)> ReloadAndWaitAsync(Guid commandId, CancellationToken cancellationToken)
+    {
         var reload = new CommandEnvelope
         {
-            CommandId = package.AssignmentId, AgentId = package.AgentId, Type = AgentCommandType.ReloadApprovedConfig,
-            CreatedAtUtc = DateTimeOffset.UtcNow, ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(15)
+            CommandId = commandId,
+            AgentId = options.AgentId,
+            Type = AgentCommandType.ReloadApprovedConfig,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(15)
         };
         await store.EnqueueLegacyCommandAsync(reload, cancellationToken);
         var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
         while (DateTimeOffset.UtcNow < deadline)
         {
             var reloadResult = await store.GetLegacyCommandResultAsync(reload.CommandId, cancellationToken);
-            if (reloadResult.Completed)
-            {
-                if (!reloadResult.Succeeded)
-                {
-                    RestorePrevious(fullPath);
-                    return new ValidationResult(false, new[] { reloadResult.Message ?? "本地采集程序拒绝了配置。" });
-                }
-                await store.SaveAppliedConfigAsync(package, cancellationToken);
-                return new ValidationResult(true, Array.Empty<string>());
-            }
+            if (reloadResult.Completed) return (reloadResult.Succeeded, reloadResult.Message);
             await Task.Delay(250, cancellationToken);
         }
-        RestorePrevious(fullPath);
-        return new ValidationResult(false, new[] { "本地采集程序未确认新配置，已恢复上一版本。" });
-    }
-
-    private static void RestorePrevious(string? fullPath)
-    {
-        if (!string.IsNullOrWhiteSpace(fullPath) && File.Exists(fullPath + ".previous"))
-            File.Copy(fullPath + ".previous", fullPath, overwrite: true);
+        return (false, "本地采集程序未在10秒内确认配置重载。");
     }
 }
