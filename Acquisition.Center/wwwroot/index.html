@@ -3,34 +3,173 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>设备集中管理平台</title>
+  <title>采集管理中心</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/app.logic.js" defer></script>
+  <script src="/app.js" defer></script>
 </head>
 <body>
-  <main>
-    <section id="dashboard">
-      <header>
-        <div><h1>设备集中管理平台</h1><p id="lastRefresh">正在读取中心状态…</p></div>
-        <div class="actions"><span id="liveState" class="badge">实时连接中</span></div>
-      </header>
-      <div id="summary" class="summary"></div>
-      <section class="card">
-        <div class="toolbar"><h2>Agent 列表</h2><input id="search" placeholder="搜索电脑名或Agent编号"><button id="searchButton">查询</button></div>
-        <div class="table-wrap"><table><thead><tr><th>状态</th><th>电脑</th><th>Agent编号</th><th>站点</th><th>版本</th><th>队列</th><th>最后心跳</th><th>操作</th></tr></thead><tbody id="agentRows"></tbody></table></div>
-        <div id="empty" class="empty" hidden>暂时没有Agent心跳数据。</div>
-      </section>
-      <section class="card config-card">
-        <div class="toolbar"><h2>集中配置</h2><span class="muted">保存后立即同步到选中的全部在线Agent</span></div>
-        <div class="config-grid">
-          <label>配置名称<input id="configName" value="采集配置"></label>
-          <label>最低Agent版本<input id="minimumAgentVersion" value="1.0.0"></label>
+  <section id="loginView" class="auth-shell" hidden>
+    <form id="loginForm" class="auth-card" autocomplete="off">
+      <div class="brand-mark" aria-hidden="true">采</div>
+      <p class="eyebrow">采集管理中心</p>
+      <h1>管理员登录</h1>
+      <p class="muted">部署、远程命令和配置发布仅对授权管理员开放。</p>
+      <label for="accessCode">管理员访问码</label>
+      <input id="accessCode" name="accessCode" type="password" autocomplete="current-password" required maxlength="256">
+      <button id="loginButton" class="button primary full" type="submit">登录</button>
+      <p id="loginMessage" class="form-message" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <div id="appShell" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">采</span>
+        <span><strong>采集管理中心</strong><small>一期部署控制台</small></span>
+      </div>
+      <nav aria-label="主要导航">
+        <button class="nav-item is-active" type="button" data-view="dashboard" aria-current="page"><span aria-hidden="true">▦</span>总览</button>
+        <button class="nav-item" type="button" data-view="deployment"><span aria-hidden="true">⇩</span>部署向导</button>
+        <button class="nav-item" type="button" data-view="configuration"><span aria-hidden="true">☷</span>配置中心</button>
+        <button class="nav-item" type="button" data-view="diagnostics"><span aria-hidden="true">◇</span>诊断</button>
+      </nav>
+      <div class="sidebar-footer">
+        <a class="setup-link" href="/setup.html">Center 本机初始化</a>
+        <p>配置发布以 Agent 回执为准。</p>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div><p id="pageEyebrow" class="eyebrow">运行管理</p><h1 id="pageTitle">设备总览</h1></div>
+        <div class="topbar-actions">
+          <span id="liveState" class="status-pill neutral">正在连接</span>
+          <span id="operatorName" class="operator-name">管理员</span>
+          <button id="logoutButton" class="button ghost small" type="button">退出</button>
         </div>
-        <label>声明式配置 JSON<textarea id="configPayload" rows="10">{"machines":[]}</textarea></label>
-        <div class="actions config-actions"><button id="syncConfig">保存并同步到全部Agent</button></div>
-        <p id="configMessage" class="error" role="status"></p>
-      </section>
-    </section>
-  </main>
-  <script src="/app.js"></script>
+      </header>
+
+      <main class="content">
+        <p id="globalMessage" class="global-message" role="status" aria-live="polite" hidden></p>
+
+        <section id="view-dashboard" class="view-panel" data-panel="dashboard">
+          <div class="section-heading">
+            <div><h2>运行概况</h2><p id="lastRefresh" class="muted">等待首次刷新…</p></div>
+            <button id="refreshDashboard" class="button secondary" type="button">立即刷新</button>
+          </div>
+          <div id="summary" class="summary-grid" aria-label="运行指标"></div>
+          <section class="card">
+            <div class="card-header toolbar">
+              <div><h2>Agent 列表</h2><p class="muted">默认不选择。勾选仅代表后续配置发布目标。</p></div>
+              <div class="search-group">
+                <label class="sr-only" for="search">搜索 Agent</label>
+                <input id="search" type="search" placeholder="电脑名或 Agent 编号">
+                <button id="searchButton" class="button secondary" type="button">查询</button>
+              </div>
+            </div>
+            <div class="selection-bar"><span>已明确选择 <strong id="selectedAgentCount">0</strong> 台</span><button id="clearSelection" class="link-button" type="button">清空选择</button></div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th scope="col">选择</th><th scope="col">状态</th><th scope="col">电脑</th><th scope="col">Agent 编号</th><th scope="col">站点</th><th scope="col">版本</th><th scope="col">队列</th><th scope="col">最后心跳</th><th scope="col">操作</th></tr></thead>
+                <tbody id="agentRows"></tbody>
+              </table>
+            </div>
+            <p id="agentEmpty" class="empty-state" hidden>暂时没有 Agent 心跳数据。</p>
+          </section>
+        </section>
+
+        <section id="view-deployment" class="view-panel" data-panel="deployment" hidden>
+          <div class="section-heading"><div><h2>部署一台采集电脑</h2><p class="muted">生成设备专用自包含包，目标机只需执行一次安装。</p></div><span class="scope-badge">一期：单机试点</span></div>
+          <ol class="step-strip" aria-label="部署步骤">
+            <li><strong>1</strong><span>核对 Center</span></li><li><strong>2</strong><span>填写设备</span></li><li><strong>3</strong><span>下载安装包</span></li><li><strong>4</strong><span>等待自动验收</span></li>
+          </ol>
+          <div class="two-column">
+            <section class="card">
+              <div class="card-header"><div><h2>最终生效配置</h2><p class="muted">只显示脱敏后的最终值和配置来源。</p></div><button id="refreshEffectiveConfig" class="button secondary small" type="button">重新检查</button></div>
+              <dl id="effectiveConfig" class="detail-list"></dl>
+              <div id="effectiveChecks" class="check-list"></div>
+              <p id="effectiveConfigMessage" class="form-message" role="status"></p>
+            </section>
+            <section class="card">
+              <div class="card-header"><div><h2>生成设备包</h2><p class="muted">路径将在目标电脑再次检查，Center 不代替目标机判断。</p></div></div>
+              <form id="deploymentForm" class="form-grid">
+                <label>设备 / Agent 编号<input id="deploymentAgentId" name="agentId" required maxlength="100" placeholder="LINE01-PC01"></label>
+                <label>厂区<input id="deploymentSite" name="site" required maxlength="100" placeholder="一厂"></label>
+                <label>楼层<input id="deploymentBuilding" name="building" maxlength="100" placeholder="一楼"></label>
+                <label>产线<input id="deploymentLine" name="line" maxlength="100" placeholder="1 号线"></label>
+                <label class="span-two">采集程序绝对目录<input id="acquisitionDirectory" name="acquisitionDirectory" required maxlength="500" placeholder="D:\采集程序"></label>
+                <p class="muted span-two">Agent 服务由安装器固定设置为“延迟自动启动”；一期不代替现有 WinForms 配置登录启动。</p>
+                <div class="span-two form-actions"><button id="generatePackage" class="button primary" type="submit">生成并下载 ZIP</button></div>
+                <p id="deploymentMessage" class="form-message span-two" role="status" aria-live="polite"></p>
+              </form>
+            </section>
+          </div>
+          <section class="card">
+            <div class="card-header"><div><h2>最近部署</h2><p class="muted">“已生成”不代表目标机已安装，以首次心跳和验收状态为准。</p></div></div>
+            <div class="table-wrap"><table><thead><tr><th>设备</th><th>站点</th><th>状态</th><th>创建时间</th><th>首次心跳</th></tr></thead><tbody id="deploymentRows"></tbody></table></div>
+            <p id="deploymentEmpty" class="empty-state" hidden>还没有部署记录。</p>
+          </section>
+        </section>
+
+        <section id="view-configuration" class="view-panel" data-panel="configuration" hidden>
+          <div class="section-heading"><div><h2>机台路径配置</h2><p class="muted">普通模式只维护当前 WinForms 已支持的五个字段。</p></div><span id="previewState" class="status-pill neutral">尚未预览</span></div>
+          <section class="card target-card">
+            <div><h3>发布目标</h3><p id="selectedAgentSummary" class="muted">尚未选择 Agent。</p></div>
+            <button class="button secondary" type="button" data-go-view="dashboard">前往总览选择</button>
+          </section>
+          <section class="card">
+            <div class="config-meta form-grid">
+              <label>配置名称<input id="configName" maxlength="120" value="采集路径配置"></label>
+              <label>最低 Agent 版本<input id="minimumAgentVersion" maxlength="40" value="1.0.0"></label>
+            </div>
+            <div class="card-header machine-heading"><div><h3>机台列表</h3><p class="muted">机台编号仅支持 1～6；目录必须填写 Windows 绝对路径。</p></div><button id="addMachine" class="button secondary small" type="button">增加机台</button></div>
+            <div id="machineRows" class="machine-rows"></div>
+            <p id="machineValidationMessage" class="form-message" role="status"></p>
+            <details class="advanced-json">
+              <summary>高级：查看生成后的 JSON</summary>
+              <label class="sr-only" for="configPayload">生成后的 JSON</label>
+              <textarea id="configPayload" rows="12" readonly spellcheck="false"></textarea>
+              <p class="muted">此处只读，避免表单和 JSON 形成两个权威来源。</p>
+            </details>
+            <div class="form-actions split-actions"><button id="previewConfig" class="button secondary" type="button">预览差异</button><button id="publishConfig" class="button primary" type="button" disabled>创建发布任务</button></div>
+            <p id="configMessage" class="form-message" role="status" aria-live="polite"></p>
+          </section>
+          <section id="previewCard" class="card" hidden>
+            <div class="card-header"><div><h2>差异预览</h2><p class="muted">修改表单或目标后，本次预览自动失效。</p></div></div>
+            <div id="previewContent" class="preview-content"></div>
+          </section>
+          <div class="two-column config-results">
+            <section class="card"><div class="card-header"><div><h2>配置版本</h2><p class="muted">历史版本不可覆盖；回滚会创建一个更高版本。</p></div></div><div id="configVersions" class="version-list"></div><p id="configVersionsEmpty" class="empty-state" hidden>暂无配置版本。</p></section>
+            <section class="card"><div class="card-header"><div><h2>Agent 确认结果</h2><p class="muted">只有 Applied 才代表已生效。</p></div></div><div id="assignmentResults" class="assignment-list"></div><p id="assignmentEmpty" class="empty-state">请选择一个配置版本查看结果。</p></section>
+          </div>
+        </section>
+
+        <section id="view-diagnostics" class="view-panel" data-panel="diagnostics" hidden>
+          <div class="section-heading"><div><h2>统一诊断</h2><p class="muted">每项均显示观察时间；未知状态不会推断为正常。</p></div></div>
+          <section class="card diagnostic-selector">
+            <label for="diagnosticAgent">选择 Agent</label><select id="diagnosticAgent"><option value="">请选择</option></select>
+            <button id="loadDiagnostics" class="button secondary" type="button">读取诊断</button><button id="exportDiagnostics" class="button ghost" type="button" disabled>导出脱敏诊断</button>
+          </section>
+          <section class="card">
+            <div class="card-header"><div><h2>诊断快照</h2><p id="diagnosticObservedAt" class="muted">尚未读取。</p></div></div>
+            <dl id="diagnosticDetails" class="detail-list diagnostic-list"></dl><div id="diagnosticChecks" class="check-list"></div><p id="diagnosticMessage" class="form-message" role="status"></p>
+          </section>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <template id="machineRowTemplate">
+    <fieldset class="machine-row">
+      <legend>机台</legend>
+      <label>编号<input data-machine-field="id" type="number" min="1" max="6" required></label>
+      <label>名称<input data-machine-field="name" maxlength="100" required></label>
+      <label>监听目录<input data-machine-field="monitorPath" maxlength="500" required></label>
+      <label>成功目录<input data-machine-field="successPath" maxlength="500" required></label>
+      <label>失败目录<input data-machine-field="errorPath" maxlength="500" required></label>
+      <button class="button danger ghost small remove-machine" type="button">移除</button>
+    </fieldset>
+  </template>
 </body>
 </html>

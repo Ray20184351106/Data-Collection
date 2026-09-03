@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Center 本机初始化</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.logic.js" defer></script>
+  <script src="/setup.js" defer></script>
+</head>
+<body class="setup-shell">
+  <div class="setup-container">
+    <header class="setup-header">
+      <div><p class="eyebrow">仅限 Center 本机</p><h1>Center 初始化向导</h1><p class="muted">先校验并显示最终生效值，再写入配置或安装服务。</p></div>
+      <a class="button ghost" href="/">返回管理中心</a>
+    </header>
+    <p class="setup-notice">安全边界：bootstrap 接口只能从本机访问。正式模式不得使用 LocalDB；已有访问码、注册码和完整连接串不会回显。新生成的管理员访问码只显示一次。</p>
+
+    <div class="setup-layout">
+      <ol class="setup-progress" aria-label="初始化步骤">
+        <li id="setupStepStatus" class="is-active">1. 读取当前状态</li>
+        <li id="setupStepConfigure">2. 填写并校验</li>
+        <li id="setupStepComplete">3. 生成最终配置</li>
+        <li id="setupStepService">4. 安装 Center 服务</li>
+      </ol>
+
+      <main class="setup-main">
+        <section class="card">
+          <div class="card-header"><div><h2>当前 bootstrap 状态</h2><p class="muted">来源由服务端计算，页面不猜测配置优先级。</p></div><button id="refreshSetupStatus" class="button secondary small" type="button">刷新</button></div>
+          <dl id="setupStatusDetails" class="detail-list"></dl>
+          <div id="setupStatusChecks" class="check-list"></div>
+          <p id="setupStatusMessage" class="form-message" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="card">
+          <div class="card-header"><div><h2>运行配置</h2><p class="muted">连接测试只验证，不会写文件、改防火墙或安装服务。</p></div></div>
+          <form id="setupForm" class="form-grid" autocomplete="off">
+            <label>运行模式
+              <select id="setupRunMode" name="runMode">
+                <option value="IsolatedTest">隔离测试</option>
+                <option value="Production">正式环境</option>
+              </select>
+            </label>
+            <label>数据库类型
+              <select id="setupDatabaseKind" name="databaseKind">
+                <option value="LocalDb">LocalDB（仅隔离测试）</option>
+                <option value="SqlServer">SQL Server</option>
+              </select>
+            </label>
+            <label>监听地址<input id="setupBindAddress" name="bindAddress" value="0.0.0.0" required maxlength="255"></label>
+            <label>端口<input id="setupPort" name="port" type="number" value="5080" min="1" max="65535" required></label>
+            <label class="span-two">Agent 使用的 Center 地址<input id="setupAdvertisedBaseUrl" name="advertisedBaseUrl" placeholder="http://192.168.1.100:5080" required maxlength="500"></label>
+            <label class="span-two">数据库连接串
+              <input id="setupConnectionString" name="connectionString" type="password" autocomplete="new-password" maxlength="2000" placeholder="仅提交给本机 bootstrap，不会回显" required spellcheck="false">
+            </label>
+            <label class="checkbox-field"><input id="setupRequireHttps" name="requireHttps" type="checkbox"> 要求 HTTPS</label>
+            <label class="checkbox-field"><input id="setupGenerateAccessCode" name="generateAccessCode" type="checkbox" checked disabled> 自动生成部署管理员访问码（必选）</label>
+          </form>
+          <div class="setup-actions">
+            <button id="validateSetup" class="button secondary" type="button">只校验</button>
+            <button id="completeSetup" class="button primary" type="button" disabled>生成最终配置</button>
+          </div>
+          <p id="setupFormMessage" class="form-message" role="status" aria-live="polite"></p>
+          <div id="setupValidationSummary" class="setup-summary" hidden>
+            <h3>校验结果</h3>
+            <dl id="setupValidationDetails" class="detail-list"></dl>
+            <div id="setupValidationChecks" class="check-list"></div>
+          </div>
+          <div id="setupAccessCodeResult" class="setup-secret-result" hidden>
+            <h3>一次性管理员访问码</h3>
+            <p>此访问码无法再次查看，请立即复制并保存到受控的密码管理工具。</p>
+            <div class="setup-secret-value">
+              <code id="setupAccessCode" tabindex="0"></code>
+              <button id="copySetupAccessCode" class="button secondary small" type="button">复制访问码</button>
+            </div>
+            <p id="setupAccessCodeMessage" class="form-message" role="status" aria-live="polite"></p>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header"><div><h2>Windows 服务</h2><p class="muted">仅在配置已完成且当前进程具备管理员权限时执行。</p></div></div>
+          <button id="installCenterService" class="button primary" type="button" disabled>安装并启动 Center 服务</button>
+          <p id="serviceMessage" class="form-message" role="status" aria-live="polite"></p>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
