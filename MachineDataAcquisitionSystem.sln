@@ -11,11 +11,15 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Center", "Acqui
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Agent", "Acquisition.Agent\Acquisition.Agent.csproj", "{C3333333-3333-4333-8333-333333333333}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Agent.Setup", "Acquisition.Agent.Setup\Acquisition.Agent.Setup.csproj", "{A7777777-7777-4777-8777-777777777777}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Contracts.Tests", "tests\Acquisition.Contracts.Tests\Acquisition.Contracts.Tests.csproj", "{D4444444-4444-4444-8444-444444444444}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Center.Tests", "tests\Acquisition.Center.Tests\Acquisition.Center.Tests.csproj", "{E5555555-5555-4555-8555-555555555555}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Agent.Tests", "tests\Acquisition.Agent.Tests\Acquisition.Agent.Tests.csproj", "{F6666666-6666-4666-8666-666666666666}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Agent.Setup.Tests", "tests\Acquisition.Agent.Setup.Tests\Acquisition.Agent.Setup.Tests.csproj", "{B8888888-8888-4888-8888-888888888888}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MachineDataAcquisitionSystem.Tests", "tests\MachineDataAcquisitionSystem.Tests\MachineDataAcquisitionSystem.Tests.csproj", "{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}"
 EndProject
@@ -41,6 +45,10 @@ Global
 		{C3333333-3333-4333-8333-333333333333}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C3333333-3333-4333-8333-333333333333}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C3333333-3333-4333-8333-333333333333}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7777777-7777-4777-8777-777777777777}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7777777-7777-4777-8777-777777777777}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7777777-7777-4777-8777-777777777777}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7777777-7777-4777-8777-777777777777}.Release|Any CPU.Build.0 = Release|Any CPU
 		{D4444444-4444-4444-8444-444444444444}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{D4444444-4444-4444-8444-444444444444}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D4444444-4444-4444-8444-444444444444}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -53,6 +61,10 @@ Global
 		{F6666666-6666-4666-8666-666666666666}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F6666666-6666-4666-8666-666666666666}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F6666666-6666-4666-8666-666666666666}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B8888888-8888-4888-8888-888888888888}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B8888888-8888-4888-8888-888888888888}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B8888888-8888-4888-8888-888888888888}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B8888888-8888-4888-8888-888888888888}.Release|Any CPU.Build.0 = Release|Any CPU
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Release|Any CPU.ActiveCfg = Release|Any CPU
