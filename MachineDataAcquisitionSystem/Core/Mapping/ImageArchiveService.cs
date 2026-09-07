@@ -28,7 +28,8 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             string hash = MappingRuleSerializer.FileSha256(sourcePath);
             string machineFolder = "Machine-" + machineId.ToString(CultureInfo.InvariantCulture);
             string targetDirectory = Path.Combine(root, machineFolder);
-            string targetName = hash + extension;
+            // 保留原始文件名；SHA-256 仅用于复制校验和同名文件复用判断。
+            string targetName = Path.GetFileName(sourcePath);
             string targetPath = Path.GetFullPath(Path.Combine(targetDirectory, targetName));
             EnsureUnderRoot(targetPath, root);
             Directory.CreateDirectory(targetDirectory);

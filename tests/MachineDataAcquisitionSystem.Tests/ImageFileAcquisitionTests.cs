@@ -34,14 +34,17 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             }
         }
 
-        [Fact]
-        public void Archive_is_stable_for_retry_and_never_overwrites_a_different_file()
+        [Theory]
+        [InlineData("CAM[WO-008].png")]
+        [InlineData("检测 图片【批次-008】.PNG")]
+        public void Archive_preserves_original_name_and_source_and_rejects_conflicts(string fileName)
         {
             string root = CreateTemporaryDirectory();
             string sourceRoot = Path.Combine(root, "source");
             string archiveRoot = Path.Combine(root, "archive");
             Directory.CreateDirectory(sourceRoot);
-            string sourcePath = Path.Combine(sourceRoot, "CAM[WO-008].png");
+            string sourcePath = Path.Combine(sourceRoot, fileName);
+            string archivedPath = null;
             try
             {
                 WritePng(sourcePath, 0x41);
@@ -54,8 +57,14 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
                 };
 
                 ImageArchiveResult first = service.Archive(sourcePath, 3, definition);
+                archivedPath = first.ArchivedPath;
                 ImageArchiveResult retry = service.Archive(sourcePath, 3, definition);
 
+                Assert.Equal(Path.Combine(archiveRoot, "Machine-3", fileName), first.ArchivedPath);
+                Assert.True(File.Exists(sourcePath));
+                Assert.Equal(File.ReadAllBytes(sourcePath), File.ReadAllBytes(first.ArchivedPath));
+                Assert.False(first.ReusedExistingFile);
+                Assert.True(retry.ReusedExistingFile);
                 Assert.Equal(first.ArchivedPath, retry.ArchivedPath);
                 Assert.Equal(first.ContentSha256, retry.ContentSha256);
                 Assert.True(File.Exists(first.ArchivedPath));
@@ -71,16 +80,9 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             finally
             {
                 DeleteFile(sourcePath);
-                foreach (string file in Directory.Exists(archiveRoot)
-                    ? Directory.GetFiles(archiveRoot, "*", SearchOption.AllDirectories)
-                    : Array.Empty<string>())
-                    DeleteFile(file);
-                foreach (string directory in Directory.Exists(archiveRoot)
-                    ? Directory.GetDirectories(archiveRoot, "*", SearchOption.AllDirectories)
-                    : Array.Empty<string>())
-                {
-                    if (Directory.Exists(directory)) Directory.Delete(directory);
-                }
+                if (archivedPath != null) DeleteFile(archivedPath);
+                string machineDirectory = Path.Combine(archiveRoot, "Machine-3");
+                if (Directory.Exists(machineDirectory)) Directory.Delete(machineDirectory);
                 if (Directory.Exists(archiveRoot)) Directory.Delete(archiveRoot);
                 if (Directory.Exists(sourceRoot)) Directory.Delete(sourceRoot);
                 Directory.Delete(root);
