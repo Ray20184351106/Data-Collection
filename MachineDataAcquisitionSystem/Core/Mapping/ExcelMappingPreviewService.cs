@@ -808,7 +808,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             }
         }
 
-        private static object ApplyTransforms(object rawValue, FieldMappingRule field)
+        internal static object ApplyTransforms(object rawValue, FieldMappingRule field)
         {
             object value = rawValue;
             if (IsMissing(value) &&
@@ -855,7 +855,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             return value;
         }
 
-        private static object ConvertToTargetType(object value, string targetType)
+        internal static object ConvertToTargetType(object value, string targetType)
         {
             if (IsMissing(value)) return null;
             switch ((targetType ?? string.Empty).Trim().ToLowerInvariant())
@@ -1195,7 +1195,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             return builder.ToString();
         }
 
-        private static bool IsMissing(object value)
+        internal static bool IsMissing(object value)
         {
             return value == null || (value is string && string.IsNullOrWhiteSpace((string)value));
         }

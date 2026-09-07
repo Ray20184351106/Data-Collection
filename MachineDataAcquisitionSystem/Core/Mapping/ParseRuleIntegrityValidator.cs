@@ -51,6 +51,13 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 version.DefinitionJson,
                 StringComparison.Ordinal);
             if (!isCanonical && !isSupportedLegacyCanonical)
+            {
+                isSupportedLegacyCanonical = string.Equals(
+                    MappingRuleSerializer.SerializePreImageLegacyProjection(definition),
+                    version.DefinitionJson,
+                    StringComparison.Ordinal);
+            }
+            if (!isCanonical && !isSupportedLegacyCanonical)
                 throw new ParseRuleStateException("The mapping definition JSON is not canonical or was modified.");
             if (!string.Equals(
                     MappingRuleSerializer.Sha256(version.DefinitionJson),

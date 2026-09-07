@@ -51,6 +51,16 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 lines.Add(csharpType + " " + contractVariable + " = " + contractModel + "." + field.TargetField + ";");
                 lines.Add(contractModel + "." + field.TargetField + " = " + contractVariable + ";");
             }
+            if (rule.RecordMode == MappingRecordMode.ImageFileName)
+            {
+                lines.Add("string __mappingArchivePathContract = model." + rule.ImageArchive.PathTargetField + ";");
+                lines.Add("model." + rule.ImageArchive.PathTargetField + " = __mappingArchivePathContract;");
+                lines.Add(
+                    "MachineDataAcquisitionSystem.Core.Mapping.MappingRuntime.PopulateImageModel(" +
+                    "model, \"" + encoded + "\", filePath, machineId);");
+                lines.Add("return model;");
+                return string.Join(Environment.NewLine, lines);
+            }
             if (repeating)
             {
                 lines.Add(

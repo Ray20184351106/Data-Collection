@@ -58,6 +58,10 @@ namespace MachineDataAcquisitionSystem.Forms
         private TextBox _mappingParentCidTextBox;
         private Button _mappingNewMasterModelButton;
         private Label _mappingFileNameInfoLabel;
+        private Label _mappingImageRootLabel;
+        private Label _mappingImagePathFieldLabel;
+        private TextBox _mappingImageRootTextBox;
+        private ComboBox _mappingImagePathFieldCombo;
         private ComboBox _mappingSheetCombo;
         private TextBox _mappingRuleNameTextBox;
         private TextBox _mappingSamplePathTextBox;
@@ -110,7 +114,7 @@ namespace MachineDataAcquisitionSystem.Forms
             splitContainer3.Panel2.SuspendLayout();
             try
             {
-                panel2.Height = 234;
+                panel2.Height = 268;
                 panel3.Height = 62;
                 btnNewMappingScript.Text = "+ 新建映射";
 
@@ -145,7 +149,7 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 8,
-                RowCount = 5,
+                RowCount = 6,
                 Padding = new Padding(6, 4, 6, 2)
             };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -160,6 +164,7 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
 
             _mappingModelCombo = new ComboBox
@@ -230,7 +235,16 @@ namespace MachineDataAcquisitionSystem.Forms
             _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.SingleRecord, "单条记录"));
             _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.RepeatingRows, "重复行表格"));
             _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.MasterDetail, "主表 + 子表"));
+            _mappingModeCombo.Items.Add(new MappingModeChoice(MappingRecordMode.ImageFileName, "图片文件名"));
             _mappingModeCombo.SelectedIndex = 0;
+            _mappingImageRootLabel = CreateMappingLabel("共享目录：");
+            _mappingImageRootTextBox = new TextBox { Dock = DockStyle.Fill };
+            _mappingImagePathFieldLabel = CreateMappingLabel("路径字段：");
+            _mappingImagePathFieldCombo = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
             _mappingLocalAssistButton = new Button
             {
                 AutoSize = true,
@@ -315,6 +329,13 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.Controls.Add(_mappingNewMasterModelButton, 4, 4);
             layout.Controls.Add(_mappingFileNameInfoLabel, 5, 4);
             layout.SetColumnSpan(_mappingFileNameInfoLabel, 3);
+
+            layout.Controls.Add(_mappingImageRootLabel, 0, 5);
+            layout.Controls.Add(_mappingImageRootTextBox, 1, 5);
+            layout.SetColumnSpan(_mappingImageRootTextBox, 3);
+            layout.Controls.Add(_mappingImagePathFieldLabel, 4, 5);
+            layout.Controls.Add(_mappingImagePathFieldCombo, 5, 5);
+            layout.SetColumnSpan(_mappingImagePathFieldCombo, 3);
 
             layout.Controls.Add(CreateMappingLabel("适用机台："), 0, 3);
             layout.Controls.Add(_mappingMachinePanel, 1, 3);
@@ -548,6 +569,8 @@ namespace MachineDataAcquisitionSystem.Forms
             _mappingNewMasterModelButton.Click += MappingNewMasterModelButton_Click;
             _mappingSheetCombo.SelectedIndexChanged += MappingSheetCombo_SelectedIndexChanged;
             _mappingModeCombo.SelectedIndexChanged += MappingModeCombo_SelectedIndexChanged;
+            _mappingImageRootTextBox.TextChanged += MappingImageSetting_Changed;
+            _mappingImagePathFieldCombo.SelectedIndexChanged += MappingImageSetting_Changed;
             _mappingRuleNameTextBox.TextChanged += MappingRuleName_TextChanged;
             _mappingBrowseButton.Click += MappingBrowseButton_Click;
             _mappingPickLocatorButton.Click += MappingPickLocatorButton_Click;
@@ -1073,6 +1096,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingExtensionLabel.Text = "扩展名：-";
             SelectMappingMode(MappingRecordMode.SingleRecord);
             _mappingParentCidTextBox.Text = "PARENT_CID";
+            _mappingImageRootTextBox.Clear();
+            _mappingImagePathFieldCombo.Items.Clear();
+            UpdateImageMappingControls();
             LoadMappingMachineCheckboxes();
             _mappingModelCombo.Enabled = true;
             if (_mappingModelCombo.Items.Count > 0 && _mappingModelCombo.SelectedIndex < 0)
@@ -1152,6 +1178,17 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                         definition.MasterDetail.Detail.ModelId);
                     _mappingParentCidTextBox.Text = definition.MasterDetail.ParentCidField;
                 }
+                if (definition.RecordMode == MappingRecordMode.ImageFileName && definition.ImageArchive != null)
+                {
+                    _mappingImageRootTextBox.Text = definition.ImageArchive.SharedRootPath;
+                    PopulateImagePathFieldChoices(definition.ImageArchive.PathTargetField);
+                }
+                else
+                {
+                    _mappingImageRootTextBox.Clear();
+                    _mappingImagePathFieldCombo.Items.Clear();
+                }
+                UpdateImageMappingControls();
                 _mappingModelCombo.Enabled = false;
                 _mappingRuleNameTextBox.Text = definition.RuleName;
 
@@ -1243,6 +1280,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             {
                 _mappingApplyingSuggestion = false;
             }
+            UpdateImagePathFieldRowState();
         }
 
         private void PopulateMappingTargetRows(
@@ -1283,13 +1321,16 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void AddMappingRow(ModelSchemaField field, FieldMappingRule rule, bool orphan, bool isMaster)
         {
+            bool fileNameOnly = isMaster || GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
             int index = dataGridView1.Rows.Add();
             DataGridViewRow row = dataGridView1.Rows[index];
             row.Cells[MappingTargetFieldColumn].Value = field.FieldName;
             row.Cells[MappingTargetTypeColumn].Value = field.FieldType;
             row.Cells[MappingRequiredColumn].Value = field.IsRequired;
             row.Cells[MappingDescriptionColumn].Value = field.Description ?? string.Empty;
-            row.Cells[MappingRoleColumn].Value = isMaster ? "主表" : "子表";
+            row.Cells[MappingRoleColumn].Value = isMaster
+                ? "主表"
+                : (GetSelectedMappingMode() == MappingRecordMode.MasterDetail ? "子表" : "单表");
             MappingFieldScope fieldScope = rule == null ? MappingFieldScope.Common : rule.Scope;
             row.Cells[MappingScopeColumn].Value = fieldScope == MappingFieldScope.RowColumn
                 ? "明细列"
@@ -1297,7 +1338,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             row.Cells[MappingKeyColumn].Value = fieldScope == MappingFieldScope.RowColumn &&
                 _mappingRepeatedRows != null && rule != null && rule.Locator != null &&
                 rule.Locator.ColumnOffset == _mappingRepeatedRows.KeyColumnOffset;
-            if (isMaster)
+            if (fileNameOnly)
             {
                 row.Cells[MappingScopeColumn].ReadOnly = true;
                 row.Cells[MappingKeyColumn].ReadOnly = true;
@@ -1305,7 +1346,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 row.Cells[MappingKeyColumn].Style.BackColor = SystemColors.Control;
             }
             row.Cells[MappingLocatorTypeColumn].Value = rule == null || rule.Locator == null
-                ? (isMaster ? "fileNameFull" : "labelOffset")
+                ? (fileNameOnly ? "fileNameFull" : "labelOffset")
                 : rule.Locator.Type;
             row.Cells[MappingLocatorValueColumn].Value = rule == null || rule.Locator == null
                 ? string.Empty
@@ -1366,9 +1407,12 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             if (_mappingSuppressEvents || _mappingCurrentDefinition != null) return;
             MappingModelChoice model = GetSelectedMappingModel();
+            if (GetSelectedMappingMode() == MappingRecordMode.ImageFileName)
+                PopulateImagePathFieldChoices(null);
             PopulateMappingRows(model == null ? 0 : model.Id, null);
             if (model != null)
-                _mappingRuleNameTextBox.Text = model.ModelName + " Excel 映射";
+                _mappingRuleNameTextBox.Text = model.ModelName +
+                    (GetSelectedMappingMode() == MappingRecordMode.ImageFileName ? " 图片文件名映射" : " Excel 映射");
             MarkMappingDirty();
         }
 
@@ -1403,11 +1447,118 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 SetMappingStatus("单条记录模式：逐个配置公共字段定位。", Color.DimGray);
             else if (mode == MappingRecordMode.RepeatingRows)
                 SetMappingStatus("重复行模式：在上方样本网格框选一行表头和首条数据，再点击“框选表格”。", Color.RoyalBlue);
-            else
+            else if (mode == MappingRecordMode.MasterDetail)
                 SetMappingStatus("主子表模式：主表字段来自文件名，子表字段来自 Excel 重复行。", Color.RoyalBlue);
+            else
+                SetMappingStatus("图片文件名模式：字段来自图片文件名，图片复制到共享目录后写入路径字段。", Color.RoyalBlue);
+            _mappingSnapshot = null;
+            _mappingSamplePathTextBox.Clear();
+            _mappingSheetCombo.Items.Clear();
+            _mappingExtensionLabel.Text = "扩展名：-";
+            if (mode == MappingRecordMode.ImageFileName)
+                PopulateImagePathFieldChoices(null);
+            UpdateImageMappingControls();
             MappingModelChoice model = GetSelectedMappingModel();
             PopulateMappingRows(model == null ? 0 : model.Id, null);
             MarkMappingDirty();
+        }
+
+        private void MappingImageSetting_Changed(object sender, EventArgs e)
+        {
+            if (_mappingSuppressEvents || GetSelectedMappingMode() != MappingRecordMode.ImageFileName) return;
+            if (ReferenceEquals(sender, _mappingImagePathFieldCombo))
+                UpdateImagePathFieldRowState();
+            MarkMappingDirty();
+        }
+
+        private void UpdateImagePathFieldRowState()
+        {
+            if (dataGridView1 == null) return;
+            bool imageMode = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
+            string pathField = imageMode
+                ? Convert.ToString(_mappingImagePathFieldCombo.SelectedItem, CultureInfo.InvariantCulture)
+                : null;
+            string[] editableColumns =
+            {
+                MappingLocatorTypeColumn,
+                MappingLocatorValueColumn,
+                MappingRowOffsetColumn,
+                MappingColumnOffsetColumn,
+                MappingValueColumnColumn,
+                MappingDataRowOffsetColumn,
+                MappingTransformsColumn,
+                MappingValueMapColumn,
+                MappingHumanConfirmedColumn
+            };
+            foreach (DataGridViewRow row in dataGridView1.Rows)
+            {
+                var metadata = row.Tag as MappingRowMetadata;
+                bool systemManaged = imageMode && string.Equals(
+                    CellText(row, MappingTargetFieldColumn),
+                    pathField,
+                    StringComparison.Ordinal);
+                foreach (string column in editableColumns)
+                {
+                    row.Cells[column].ReadOnly = systemManaged;
+                    row.Cells[column].Style.BackColor = systemManaged
+                        ? SystemColors.Control
+                        : SystemColors.Window;
+                }
+                row.Cells[MappingDefaultValueColumn].ReadOnly = systemManaged ||
+                    Convert.ToBoolean(row.Cells[MappingRequiredColumn].Value ?? false);
+                if (systemManaged)
+                {
+                    row.Cells[MappingPreviewCellColumn].Value = "系统";
+                    row.Cells[MappingPreviewValueColumn].Value = string.Empty;
+                    row.Cells[MappingPreviewConvertedValueColumn].Value = string.Empty;
+                    row.Cells[MappingPreviewResultColumn].Value = "运行时写入共享路径";
+                    row.Cells[MappingPreviewResultColumn].Style.ForeColor = Color.RoyalBlue;
+                }
+                else if (metadata == null || !metadata.IsOrphan)
+                {
+                    ClearMappingPreviewRow(row);
+                }
+            }
+        }
+
+        private void PopulateImagePathFieldChoices(string preferredField)
+        {
+            bool previous = _mappingSuppressEvents;
+            _mappingSuppressEvents = true;
+            try
+            {
+                string selected = preferredField ?? Convert.ToString(
+                    _mappingImagePathFieldCombo.SelectedItem,
+                    CultureInfo.InvariantCulture);
+                _mappingImagePathFieldCombo.Items.Clear();
+                MappingModelChoice model = GetSelectedMappingModel();
+                if (model != null)
+                {
+                    foreach (ModelSchemaField field in LoadMappingFields(model.Id).Where(field =>
+                        string.Equals(field.FieldType, "string", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(field.FieldName, "CID", StringComparison.OrdinalIgnoreCase)))
+                        _mappingImagePathFieldCombo.Items.Add(field.FieldName);
+                }
+                int index = string.IsNullOrWhiteSpace(selected)
+                    ? -1
+                    : _mappingImagePathFieldCombo.Items.IndexOf(selected);
+                _mappingImagePathFieldCombo.SelectedIndex = index >= 0
+                    ? index
+                    : (_mappingImagePathFieldCombo.Items.Count > 0 ? 0 : -1);
+            }
+            finally
+            {
+                _mappingSuppressEvents = previous;
+            }
+        }
+
+        private void UpdateImageMappingControls()
+        {
+            bool visible = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
+            _mappingImageRootLabel.Visible = visible;
+            _mappingImageRootTextBox.Visible = visible;
+            _mappingImagePathFieldLabel.Visible = visible;
+            _mappingImagePathFieldCombo.Visible = visible;
         }
 
         private MappingRecordMode GetSelectedMappingMode()
@@ -2068,6 +2219,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             MappingModelChoice detailModel = GetSelectedMappingDetailModel();
             AppendMappingStatePart(state, detailModel == null ? 0 : detailModel.Id);
             AppendMappingStatePart(state, _mappingParentCidTextBox == null ? null : _mappingParentCidTextBox.Text);
+            AppendMappingStatePart(state, _mappingImageRootTextBox == null ? null : _mappingImageRootTextBox.Text);
+            AppendMappingStatePart(state, _mappingImagePathFieldCombo == null ? null : _mappingImagePathFieldCombo.SelectedItem);
             AppendMappingStatePart(state, _mappingRuleNameTextBox == null ? null : _mappingRuleNameTextBox.Text);
             AppendMappingStatePart(state, _mappingSheetCombo == null ? null : _mappingSheetCombo.SelectedItem);
             AppendMappingStatePart(state, (int)GetSelectedMappingMode());
@@ -2134,10 +2287,13 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
 
         private void MappingBrowseButton_Click(object sender, EventArgs e)
         {
+            bool imageMode = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
             using (var dialog = new OpenFileDialog
             {
-                Title = "选择用于映射验证的 Excel 样本",
-                Filter = "Excel 工作簿 (*.xls;*.xlsx)|*.xls;*.xlsx",
+                Title = imageMode ? "选择用于文件名映射验证的图片样本" : "选择用于映射验证的 Excel 样本",
+                Filter = imageMode
+                    ? "图片文件 (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp"
+                    : "Excel 工作簿 (*.xls;*.xlsx)|*.xls;*.xlsx",
                 CheckFileExists = true,
                 Multiselect = false
             })
@@ -2146,7 +2302,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 try
                 {
                     CancelMappingPointSelection(false);
-                    MappingWorkbookSnapshot snapshot = _mappingPreviewService.Inspect(dialog.FileName);
+                    MappingWorkbookSnapshot snapshot = imageMode
+                        ? new ImageFileMappingService().Inspect(dialog.FileName)
+                        : _mappingPreviewService.Inspect(dialog.FileName);
                     if (_mappingCurrentDefinition != null &&
                         !string.Equals(
                             snapshot.FileExtension,
@@ -2157,7 +2315,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                             "样本扩展名与当前映射定义不一致；同一映射定义不能切换文件扩展名。");
                     }
 
-                    string preferredSheet = _mappingCurrentDefinition == null
+                    string preferredSheet = imageMode || _mappingCurrentDefinition == null
                         ? null
                         : _mappingCurrentDefinition.SheetName;
                     _mappingSnapshot = snapshot;
@@ -2186,11 +2344,13 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     PopulateMappingSampleGrid();
                     ClearMappingPreviewColumns();
                     SetMappingStatus(
-                        string.Format(
-                            CultureInfo.InvariantCulture,
-                            "样本已只读加载：{0} 个工作表，SHA-256 {1}",
-                            snapshot.Sheets.Count,
-                            ShortHash(snapshot.FileSha256)),
+                        imageMode
+                            ? "图片样本已只读验证，SHA-256 " + ShortHash(snapshot.FileSha256)
+                            : string.Format(
+                                CultureInfo.InvariantCulture,
+                                "样本已只读加载：{0} 个工作表，SHA-256 {1}",
+                                snapshot.Sheets.Count,
+                                ShortHash(snapshot.FileSha256)),
                         Color.DarkGreen);
                     UpdateMappingCommandState();
                 }
@@ -2947,14 +3107,14 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     if (_mappingSnapshot == null || string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
                         throw new MappingValidationException(
                             _mappingCurrentVersion == null || _mappingDirty
-                                ? "映射内容有修改，保存前必须选择只读 Excel 样本进行自动验证。"
-                                : "当前映射版本尚未验证，必须选择只读 Excel 样本完成验证后才能保存。");
+                                ? "映射内容有修改，保存前必须选择只读样本进行自动验证。"
+                                : "当前映射版本尚未验证，必须选择只读样本完成验证后才能保存。");
 
                     EnsureMappedRowsHumanConfirmed();
                     definition = BuildMappingDefinition(true);
-                    preview = _mappingPreviewService.Preview(
-                        _mappingSamplePathTextBox.Text,
-                        definition);
+                    preview = definition.RecordMode == MappingRecordMode.ImageFileName
+                        ? new ImageFileMappingService().Preview(_mappingSamplePathTextBox.Text, definition)
+                        : _mappingPreviewService.Preview(_mappingSamplePathTextBox.Text, definition);
                     DisplayMappingPreview(preview);
                     if (!preview.IsValid)
                     {
@@ -3207,10 +3367,13 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                 ? (_mappingCurrentDefinition == null ? null : _mappingCurrentDefinition.NormalizedExtension)
                 : _mappingSnapshot.FileExtension;
             if (string.IsNullOrWhiteSpace(extension))
-                throw new MappingValidationException("新映射必须先选择 Excel 样本以确定扩展名。");
+                throw new MappingValidationException("新映射必须先选择样本以确定扩展名。");
             string sheetName = Convert.ToString(_mappingSheetCombo.SelectedItem, CultureInfo.InvariantCulture);
-            if (string.IsNullOrWhiteSpace(sheetName))
+            if (GetSelectedMappingMode() != MappingRecordMode.ImageFileName && string.IsNullOrWhiteSpace(sheetName))
                 throw new MappingValidationException("请选择工作表。");
+
+            if (GetSelectedMappingMode() == MappingRecordMode.ImageFileName)
+                return BuildImageFileNameMappingDefinition(model, extension, requireRequiredMappings);
 
             if (GetSelectedMappingMode() == MappingRecordMode.MasterDetail)
             {
@@ -3264,6 +3427,75 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             if (definition.Fields.Count == 0)
                 throw new MappingValidationException("草稿至少需要一个已配置的字段映射。");
 
+            MappingRuleSerializer.ValidateDefinition(definition);
+            return definition;
+        }
+
+        private MappingRuleDefinition BuildImageFileNameMappingDefinition(
+            MappingModelChoice model,
+            string extension,
+            bool requireRequiredMappings)
+        {
+            string sharedRoot = (_mappingImageRootTextBox.Text ?? string.Empty).Trim();
+            string pathField = Convert.ToString(
+                _mappingImagePathFieldCombo.SelectedItem,
+                CultureInfo.InvariantCulture);
+            if (string.IsNullOrWhiteSpace(sharedRoot))
+                throw new MappingValidationException("请配置图片共享目录。");
+            if (string.IsNullOrWhiteSpace(pathField))
+                throw new MappingValidationException("请选择保存共享图片地址的 string 字段。");
+
+            int segmentCount;
+            if (!string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
+                segmentCount = FileNameExtractionParser.Inspect(_mappingSamplePathTextBox.Text).Segments.Count;
+            else if (_mappingCurrentDefinition != null && _mappingCurrentDefinition.ImageArchive != null &&
+                _mappingCurrentDefinition.ImageArchive.FileName != null)
+                segmentCount = _mappingCurrentDefinition.ImageArchive.FileName.ExpectedSegmentCount;
+            else
+                throw new MappingValidationException("图片文件名映射必须选择图片样本。");
+
+            var definition = new MappingRuleDefinition
+            {
+                DefinitionId = _mappingCurrentDefinition == null ? 0 : _mappingCurrentDefinition.DefinitionId,
+                RuleName = _mappingRuleNameTextBox.Text.Trim(),
+                ModelId = model.Id,
+                TargetModelType = model.ModelName,
+                ModelSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(model.Id)),
+                NormalizedExtension = extension,
+                SheetName = null,
+                TemplateSignature = _mappingTemplateSignature,
+                RecordMode = MappingRecordMode.ImageFileName,
+                ImageArchive = new ImageArchiveDefinition
+                {
+                    SharedRootPath = sharedRoot,
+                    PathTargetField = pathField,
+                    PathTargetType = "string",
+                    FileName = new FileNameExtractionDefinition { ExpectedSegmentCount = segmentCount }
+                }
+            };
+            var missingRequired = new List<string>();
+            foreach (DataGridViewRow row in dataGridView1.Rows)
+            {
+                var metadata = row.Tag as MappingRowMetadata;
+                if (metadata != null && metadata.IsOrphan) continue;
+                if (string.Equals(
+                    CellText(row, MappingTargetFieldColumn),
+                    pathField,
+                    StringComparison.Ordinal))
+                    continue;
+                bool required = Convert.ToBoolean(row.Cells[MappingRequiredColumn].Value ?? false);
+                if (!HasMappingLocator(row))
+                {
+                    if (requireRequiredMappings && required)
+                        missingRequired.Add(CellText(row, MappingTargetFieldColumn));
+                    continue;
+                }
+                definition.Fields.Add(CreateMappingFieldRule(row));
+            }
+            if (missingRequired.Count > 0)
+                throw new MappingValidationException("必填字段尚未映射：" + string.Join(", ", missingRequired));
+            if (definition.Fields.Count == 0)
+                throw new MappingValidationException("图片规则至少需要一个文件名字段映射。");
             MappingRuleSerializer.ValidateDefinition(definition);
             return definition;
         }
@@ -3543,6 +3775,17 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             {
                 ClearMappingPreviewRow(row);
                 string target = CellText(row, MappingTargetFieldColumn);
+                if (GetSelectedMappingMode() == MappingRecordMode.ImageFileName &&
+                    string.Equals(
+                        target,
+                        Convert.ToString(_mappingImagePathFieldCombo.SelectedItem, CultureInfo.InvariantCulture),
+                        StringComparison.Ordinal))
+                {
+                    row.Cells[MappingPreviewCellColumn].Value = "系统";
+                    row.Cells[MappingPreviewResultColumn].Value = "运行时写入共享路径";
+                    row.Cells[MappingPreviewResultColumn].Style.ForeColor = Color.RoyalBlue;
+                    continue;
+                }
                 MappingPreviewFieldResult field;
                 if (!preview.Fields.TryGetValue(target, out field) && preview.Records.Count > 0)
                     preview.Records[0].Fields.TryGetValue(target, out field);
@@ -3886,6 +4129,11 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             List<string> pending = dataGridView1.Rows
                 .Cast<DataGridViewRow>()
                 .Where(row => HasMappingLocator(row))
+                .Where(row => GetSelectedMappingMode() != MappingRecordMode.ImageFileName ||
+                    !string.Equals(
+                        CellText(row, MappingTargetFieldColumn),
+                        Convert.ToString(_mappingImagePathFieldCombo.SelectedItem, CultureInfo.InvariantCulture),
+                        StringComparison.Ordinal))
                 .Where(row =>
                 {
                     var metadata = row.Tag as MappingRowMetadata;
@@ -4012,8 +4260,13 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             bool ready = _mappingDataLoaded && _mappingRuleStore != null;
             bool hasModel = GetSelectedMappingModel() != null;
             bool isMasterDetail = GetSelectedMappingMode() == MappingRecordMode.MasterDetail;
+            bool isImageFileName = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
             bool hasDetailModel = !isMasterDetail || GetSelectedMappingDetailModel() != null;
-            bool hasSample = _mappingSnapshot != null && GetSelectedMappingSheet() != null;
+            bool hasSample = _mappingSnapshot != null &&
+                (isImageFileName || GetSelectedMappingSheet() != null);
+            bool hasImageSettings = !isImageFileName ||
+                (!string.IsNullOrWhiteSpace(_mappingImageRootTextBox.Text) &&
+                 _mappingImagePathFieldCombo.SelectedItem != null);
             bool hasDefinition = _mappingCurrentVersion != null;
             bool canReuseValidatedVersion = !MappingSavePolicy.RequiresSample(
                 _mappingCurrentVersion,
@@ -4024,21 +4277,23 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             _mappingDetailModelCombo.Enabled = isMasterDetail && ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
             _mappingParentCidTextBox.Enabled = isMasterDetail && ready && !_mappingAiBusy && _mappingCurrentDefinition == null;
             _mappingNewMasterModelButton.Enabled = isMasterDetail && ready && !_mappingAiBusy;
-            _mappingFileNameInfoLabel.ForeColor = isMasterDetail ? Color.DimGray : SystemColors.GrayText;
+            _mappingImageRootTextBox.Enabled = isImageFileName && ready && !_mappingAiBusy;
+            _mappingImagePathFieldCombo.Enabled = isImageFileName && ready && !_mappingAiBusy;
+            _mappingFileNameInfoLabel.ForeColor = isMasterDetail || isImageFileName ? Color.DimGray : SystemColors.GrayText;
             _mappingRuleNameTextBox.Enabled = ready && !_mappingAiBusy;
-            _mappingSheetCombo.Enabled = ready && !_mappingAiBusy && hasSample;
+            _mappingSheetCombo.Enabled = !isImageFileName && ready && !_mappingAiBusy && hasSample;
             _mappingModeCombo.Enabled = ready && !_mappingAiBusy;
             _mappingFrameTableButton.Enabled = ready && hasSample && !_mappingAiBusy &&
                 (GetSelectedMappingMode() == MappingRecordMode.RepeatingRows || isMasterDetail);
             dataGridView1.Enabled = ready && !_mappingAiBusy;
             btnNewMappingScript.Enabled = ready && !_mappingAiBusy;
             listBoxMappingScripts.Enabled = ready && !_mappingAiBusy;
-            _mappingLocalAssistButton.Enabled = ready && hasSample && !_mappingAiBusy &&
+            _mappingLocalAssistButton.Enabled = !isImageFileName && ready && hasSample && !_mappingAiBusy &&
                 GetMappingSuggestionEligibleRows().Count > 0;
-            _mappingPickLocatorButton.Enabled = ready && hasSample && !_mappingAiBusy &&
+            _mappingPickLocatorButton.Enabled = !isImageFileName && ready && hasSample && !_mappingAiBusy &&
                 dataGridView1.CurrentRow != null &&
                 GetMappingFieldScope(dataGridView1.CurrentRow) == MappingFieldScope.Common;
-            _mappingAiAssistButton.Enabled = ready && hasSample && !_mappingAiBusy &&
+            _mappingAiAssistButton.Enabled = !isImageFileName && ready && hasSample && !_mappingAiBusy &&
                 _mappingAiOptions != null && GetMappingSuggestionEligibleRows().Count > 0;
             _mappingAiAssistButton.Text = _mappingAiOptions == null ? "AI 未配置" : "AI 自动填映射";
             _mappingToolTip.SetToolTip(
@@ -4046,7 +4301,7 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                 _mappingAiOptions == null
                     ? (_mappingAiUnavailableReason ?? "AI 未配置")
                     : "仅填充空白且未确认项；返回失败时不修改草稿");
-            _mappingSaveButton.Enabled = ready && hasModel && hasDetailModel && !_mappingAiBusy &&
+            _mappingSaveButton.Enabled = ready && hasModel && hasDetailModel && hasImageSettings && !_mappingAiBusy &&
                 (hasSample || canReuseValidatedVersion);
             _mappingDeleteButton.Enabled = ready && hasDefinition && !_mappingAiBusy;
         }

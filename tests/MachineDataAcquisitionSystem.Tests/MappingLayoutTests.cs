@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
@@ -232,6 +233,39 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             Assert.Equal(0, locator.ColumnOffset);
             Assert.Equal(0, locator.DataRowOffset);
             Assert.True(string.IsNullOrEmpty(locator.ValueColumn));
+        }
+
+        [Fact]
+        public void Mapping_editor_exposes_image_filename_mode_and_archive_settings()
+        {
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new ModelConfigForm())
+                    {
+                        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                        var mode = Assert.IsType<ComboBox>(
+                            typeof(ModelConfigForm).GetField("_mappingModeCombo", Flags).GetValue(form));
+                        Assert.Contains(mode.Items.Cast<object>(), item =>
+                            string.Equals(item.ToString(), "图片文件名", StringComparison.Ordinal));
+                        Assert.IsType<TextBox>(
+                            typeof(ModelConfigForm).GetField("_mappingImageRootTextBox", Flags).GetValue(form));
+                        Assert.IsType<ComboBox>(
+                            typeof(ModelConfigForm).GetField("_mappingImagePathFieldCombo", Flags).GetValue(form));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.Null(failure);
         }
 
         private static Point InvokeDirection(MethodInfo method, Point pointer, Rectangle viewport)

@@ -27,6 +27,22 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             PopulateProperties(model, modelType, rule.Fields, preview.Fields);
         }
 
+        public static void PopulateImageModel(object model, string encodedRule, string filePath, int machineId)
+        {
+            if (model == null) throw new ArgumentNullException(nameof(model));
+            MappingRuleDefinition rule = DecodeRule(encodedRule);
+            MappingRuleSerializer.ValidateDefinition(rule);
+            if (rule.RecordMode != MappingRecordMode.ImageFileName)
+                throw new MappingValidationException("非图片文件名规则不能使用图片映射运行时。");
+            Type modelType = model.GetType();
+            EnsureModelType(modelType, rule.TargetModelType);
+
+            MappingPreviewResult preview = new ImageFileMappingService().Preview(filePath, rule);
+            if (!preview.IsValid)
+                throw new MappingValidationException(BuildPreviewErrorMessage(preview));
+            PopulateProperties(model, modelType, rule.Fields, preview.Fields);
+        }
+
         public static List<T> CreateModels<T>(string encodedRule, string filePath, int machineId)
             where T : new()
         {

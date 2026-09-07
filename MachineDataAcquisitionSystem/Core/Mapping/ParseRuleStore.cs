@@ -1379,11 +1379,23 @@ WHERE ModelId = @ModelId;"))
                     throw new MappingValidationException("The target model field required flag changed: " + mappedField.TargetField);
             }
 
+            if (definition.RecordMode == MappingRecordMode.ImageFileName)
+            {
+                ModelSchemaField archivePathField;
+                if (!modelFields.TryGetValue(definition.ImageArchive.PathTargetField, out archivePathField))
+                    throw new MappingValidationException(
+                        "The image archive path field does not exist: " + definition.ImageArchive.PathTargetField);
+                if (!string.Equals(archivePathField.FieldType, "string", StringComparison.OrdinalIgnoreCase))
+                    throw new MappingValidationException("The image archive path field must be string.");
+            }
+
             if (!requireAllRequiredFields) return;
 
             var mappedTargets = new HashSet<string>(
                 definition.Fields.Select(field => field.TargetField),
                 StringComparer.Ordinal);
+            if (definition.RecordMode == MappingRecordMode.ImageFileName)
+                mappedTargets.Add(definition.ImageArchive.PathTargetField);
             string[] missingRequired = modelFields.Values
                 .Where(field => field.IsRequired && !mappedTargets.Contains(field.FieldName))
                 .Select(field => field.FieldName)

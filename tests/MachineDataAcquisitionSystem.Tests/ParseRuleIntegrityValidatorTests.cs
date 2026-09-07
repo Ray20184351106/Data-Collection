@@ -33,6 +33,29 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
         }
 
         [Fact]
+        public void Validate_accepts_pre_image_legacy_json_without_image_archive_property()
+        {
+            MappingRuleDefinition definition = NewSingleRecordRule();
+            var legacyToken = JObject.Parse(MappingRuleSerializer.Serialize(definition));
+            legacyToken.Property("RecordMode").Remove();
+            legacyToken.Property("RepeatedRows").Remove();
+            legacyToken.Property("ImageArchive").Remove();
+            foreach (JObject field in (JArray)legacyToken["Fields"])
+                field.Property("Scope").Remove();
+            string legacyJson = legacyToken.ToString(Formatting.None);
+            MappingRuleDefinition legacyDefinition = MappingRuleSerializer.Deserialize(legacyJson);
+            string canonicalScript = new MappingScriptGenerator().Generate(legacyDefinition);
+            string legacyScript = canonicalScript.Replace(
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(MappingRuleSerializer.Serialize(legacyDefinition))),
+                Convert.ToBase64String(Encoding.UTF8.GetBytes(legacyJson)));
+
+            ParseRuleIntegrityValidator.Validate(NewVersion(
+                legacyJson,
+                MappingRuleSerializer.Sha256(legacyJson),
+                legacyScript));
+        }
+
+        [Fact]
         public void Validate_rejects_other_noncanonical_mapping_json()
         {
             MappingRuleDefinition definition = NewSingleRecordRule();

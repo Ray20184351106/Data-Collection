@@ -875,11 +875,13 @@ namespace MachineDataAcquisitionSystem
 
                 MappingRuleDefinition mappingDefinition = null;
                 bool isMasterDetail = false;
+                bool isImageFileName = false;
                 if (script.RuleType == ParseRuleType.Mapping &&
                     !string.IsNullOrWhiteSpace(script.DefinitionJson))
                 {
                     mappingDefinition = MappingRuleSerializer.Deserialize(script.DefinitionJson);
                     isMasterDetail = mappingDefinition.RecordMode == MappingRecordMode.MasterDetail;
+                    isImageFileName = mappingDefinition.RecordMode == MappingRecordMode.ImageFileName;
                 }
 
                 AddLog($"[机台{machineId}] 找到脚本: {script.Name} (模型ID: {script.ModelId})", LogLevel.Success);
@@ -966,6 +968,24 @@ namespace MachineDataAcquisitionSystem
                             masterDetailCommitted = true;
                             AddLog(
                                 $"[机台{machineId}] 主子表事务提交成功：主表 1 条、子表 {result.DetailCount} 条，主表CID={result.MasterCid}",
+                                LogLevel.Success);
+                        }
+                        if (isImageFileName)
+                        {
+                            if (models.Count != 1)
+                                throw new MappingValidationException("图片文件名规则必须且只能生成一条目标记录。");
+                            ImageArchiveResult archive = new ImageArchiveService().Archive(
+                                filePath,
+                                machineId,
+                                mappingDefinition.ImageArchive);
+                            ImageArchiveService.ApplyArchivedPath(
+                                models[0],
+                                mappingDefinition.ImageArchive,
+                                archive.ArchivedPath);
+                            AddLog(
+                                archive.ReusedExistingFile
+                                    ? $"[机台{machineId}] 已复用共享图片: {archive.ArchivedPath}"
+                                    : $"[机台{machineId}] 图片已复制到共享目录: {archive.ArchivedPath}",
                                 LogLevel.Success);
                         }
                         foreach (object model in models)

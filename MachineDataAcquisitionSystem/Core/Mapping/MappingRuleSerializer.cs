@@ -72,7 +72,6 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 if (rule.RepeatedRows == null)
                     token.Property(nameof(MappingRuleDefinition.RepeatedRows))?.Remove();
             }
-
             var fields = token[nameof(MappingRuleDefinition.Fields)] as JArray;
             if (fields != null)
             {
@@ -84,6 +83,16 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 }
             }
 
+            string json = SortToken(token).ToString(Formatting.None);
+            ValidateSerializedSize(json);
+            return json;
+        }
+
+        internal static string SerializePreImageLegacyProjection(MappingRuleDefinition rule)
+        {
+            JObject token = JObject.Parse(SerializeLegacyDefaultEnumProjection(rule));
+            if (rule.ImageArchive == null)
+                token.Property(nameof(MappingRuleDefinition.ImageArchive))?.Remove();
             string json = SortToken(token).ToString(Formatting.None);
             ValidateSerializedSize(json);
             return json;
@@ -149,8 +158,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 throw new MappingValidationException("文件扩展名不能为空。");
             if (!normalized.StartsWith(".", StringComparison.Ordinal))
                 normalized = "." + normalized;
-            if (normalized != ".xls" && normalized != ".xlsx")
-                throw new MappingValidationException("首版映射仅支持 .xls 和 .xlsx。");
+            if (normalized != ".xls" && normalized != ".xlsx" &&
+                normalized != ".jpg" && normalized != ".jpeg" &&
+                normalized != ".png" && normalized != ".bmp")
+                throw new MappingValidationException("映射仅支持 .xls、.xlsx、.jpg、.jpeg、.png 和 .bmp。");
             return normalized;
         }
 
@@ -169,12 +180,21 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 throw new MappingValidationException("模型结构哈希不能为空。");
             ValidateTextLength(rule.ModelSchemaHash, 256, "模型结构哈希");
             rule.NormalizedExtension = NormalizeExtension(rule.NormalizedExtension);
+            if (!Enum.IsDefined(typeof(MappingRecordMode), rule.RecordMode))
+                throw new MappingValidationException("记录模式无效。");
+            if (rule.RecordMode == MappingRecordMode.ImageFileName)
+            {
+                ValidateImageFileName(rule);
+                return;
+            }
+            if (rule.ImageArchive != null)
+                throw new MappingValidationException("Excel 映射不能包含图片共享目录配置。");
+            if (rule.NormalizedExtension != ".xls" && rule.NormalizedExtension != ".xlsx")
+                throw new MappingValidationException("Excel 映射仅支持 .xls 和 .xlsx。");
             if (string.IsNullOrWhiteSpace(rule.SheetName))
                 throw new MappingValidationException("工作表名称不能为空。");
             ValidateTextLength(rule.SheetName, 128, "工作表名称");
             ValidateTextLength(rule.TemplateSignature, 256, "模板签名");
-            if (!Enum.IsDefined(typeof(MappingRecordMode), rule.RecordMode))
-                throw new MappingValidationException("记录模式无效。");
             if (rule.RecordMode == MappingRecordMode.MasterDetail)
             {
                 ValidateMasterDetail(rule);
@@ -238,6 +258,38 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     field.Locator.ColumnOffset == rule.RepeatedRows.KeyColumnOffset))
                     throw new MappingValidationException("重复行关键列必须映射到一个目标字段。");
             }
+        }
+
+        private static void ValidateImageFileName(MappingRuleDefinition rule)
+        {
+            if (rule.NormalizedExtension != ".jpg" && rule.NormalizedExtension != ".jpeg" &&
+                rule.NormalizedExtension != ".png" && rule.NormalizedExtension != ".bmp")
+                throw new MappingValidationException("图片文件名映射仅支持 .jpg、.jpeg、.png 和 .bmp。");
+            if (!string.IsNullOrWhiteSpace(rule.SheetName) || rule.RepeatedRows != null || rule.MasterDetail != null)
+                throw new MappingValidationException("图片文件名映射不能包含 Excel 工作表、重复行或主子表配置。");
+            if (rule.ImageArchive == null)
+                throw new MappingValidationException("图片文件名映射缺少共享目录配置。");
+            if (string.IsNullOrWhiteSpace(rule.ImageArchive.SharedRootPath) ||
+                !Path.IsPathRooted(rule.ImageArchive.SharedRootPath))
+                throw new MappingValidationException("图片共享目录必须是绝对路径或 UNC 路径。");
+            ValidateTextLength(rule.ImageArchive.SharedRootPath, MaximumRuleTextLength, "图片共享目录");
+            if (!IsIdentifier(rule.ImageArchive.PathTargetField))
+                throw new MappingValidationException("图片共享路径目标字段无效。");
+            if (!string.Equals(rule.ImageArchive.PathTargetType, "string", StringComparison.OrdinalIgnoreCase))
+                throw new MappingValidationException("图片共享路径目标字段必须是 string 类型。");
+            if (rule.ImageArchive.FileName == null ||
+                rule.ImageArchive.FileName.ExpectedSegmentCount < 0 ||
+                rule.ImageArchive.FileName.ExpectedSegmentCount > FileNameExtractionParser.MaximumSegments)
+                throw new MappingValidationException("图片文件名片段数量超出允许范围。");
+            if (rule.Fields != null && rule.Fields.Any(field => field != null &&
+                string.Equals(field.TargetField, rule.ImageArchive.PathTargetField, StringComparison.Ordinal)))
+                throw new MappingValidationException("图片共享路径字段由系统写入，不能参与文件名映射。");
+            ValidateTargetFields(
+                rule.Fields,
+                null,
+                true,
+                rule.ImageArchive.FileName.ExpectedSegmentCount,
+                "图片");
         }
 
         private static void ValidateMasterDetail(MappingRuleDefinition rule)
@@ -339,7 +391,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                                   locatorType == "fileNameSegment";
                 bool isRow = locatorType == "rowColumn";
                 if (fileNameOnly && (!isFileName || field.Scope != MappingFieldScope.Common))
-                    throw new MappingValidationException("主模型字段首版只能来自文件名。");
+                    throw new MappingValidationException(label + "字段只能来自文件名。");
                 if (!fileNameOnly && (isFileName || (field.Scope == MappingFieldScope.RowColumn) != isRow))
                     throw new MappingValidationException("子模型字段来源范围与定位方式不一致：" + field.TargetField);
                 if (locatorType == "fileNameSegment" &&
@@ -377,7 +429,8 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
         private static void ValidateRepeatedRows(MappingRuleDefinition rule)
         {
-            if (rule.RecordMode == MappingRecordMode.SingleRecord)
+            if (rule.RecordMode == MappingRecordMode.SingleRecord ||
+                rule.RecordMode == MappingRecordMode.ImageFileName)
             {
                 if (rule.RepeatedRows != null)
                     throw new MappingValidationException("单条记录模式不能配置重复行区域。");

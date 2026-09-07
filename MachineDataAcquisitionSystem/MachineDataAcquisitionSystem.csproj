@@ -194,6 +194,8 @@
     <Compile Include="Core\Mapping\ConfigurationDeletionService.cs" />
     <Compile Include="Core\Mapping\ExcelMappingPreviewService.cs" />
     <Compile Include="Core\Mapping\FileNameExtractionParser.cs" />
+    <Compile Include="Core\Mapping\ImageFileMappingService.cs" />
+    <Compile Include="Core\Mapping\ImageArchiveService.cs" />
     <Compile Include="Core\Mapping\LegacyScriptVersionService.cs" />
     <Compile Include="Core\Mapping\MappingContracts.cs" />
     <Compile Include="Core\Mapping\MappingRuleSerializer.cs" />

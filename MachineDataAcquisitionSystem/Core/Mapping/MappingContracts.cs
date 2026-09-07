@@ -22,13 +22,23 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public RepeatedRowDefinition RepeatedRows { get; set; }
         public List<FieldMappingRule> Fields { get; set; }
         public MasterDetailMappingDefinition MasterDetail { get; set; }
+        public ImageArchiveDefinition ImageArchive { get; set; }
     }
 
     public enum MappingRecordMode
     {
         SingleRecord = 0,
         RepeatingRows = 1,
-        MasterDetail = 2
+        MasterDetail = 2,
+        ImageFileName = 3
+    }
+
+    public sealed class ImageArchiveDefinition
+    {
+        public string SharedRootPath { get; set; }
+        public string PathTargetField { get; set; }
+        public string PathTargetType { get; set; }
+        public FileNameExtractionDefinition FileName { get; set; }
     }
 
     public sealed class MasterDetailMappingDefinition
