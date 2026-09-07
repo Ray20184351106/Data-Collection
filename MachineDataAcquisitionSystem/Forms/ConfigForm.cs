@@ -30,6 +30,7 @@ namespace MachineDataAcquisitionSystem.Forms
         private Button _aiMappingTestButton;
         private Label _aiMappingStatusLabel;
         private CheckBox _autoStartCheckBox;
+        private CheckedListBox _machineAutoStartList;
         private Button _basicSettingsSaveButton;
         private Label _basicSettingsStatusLabel;
         private readonly StartupRegistrationService _startupRegistrationService = new StartupRegistrationService();
@@ -96,6 +97,37 @@ namespace MachineDataAcquisitionSystem.Forms
                 Margin = new Padding(28, 8, 3, 3),
                 Text = "仅对当前 Windows 用户生效，不需要管理员权限。"
             };
+            var machineStartLabel = new Label
+            {
+                AutoSize = true,
+                Margin = new Padding(3, 20, 3, 8),
+                Text = "程序启动后默认采集的机台（分别勾选）"
+            };
+            _machineAutoStartList = new CheckedListBox
+            {
+                Name = "machineAutoStartList",
+                Width = 520,
+                Height = 150,
+                IntegralHeight = false,
+                CheckOnClick = true,
+                FormattingEnabled = true,
+                HorizontalScrollbar = true
+            };
+            _machineAutoStartList.Format += (sender, args) =>
+            {
+                if (args.ListItem is MachineConfig machine)
+                    args.Value = $"{machine.Name}（ID: {machine.Id}）";
+            };
+            _machineAutoStartList.ItemCheck += AutoStartCheckBox_CheckedChanged;
+            var machineStartDescription = new Label
+            {
+                AutoSize = true,
+                MaximumSize = new Size(650, 0),
+                ForeColor = Color.DimGray,
+                Margin = new Padding(3, 8, 3, 3),
+                Text = "保存后下次启动程序时生效，手动打开程序也适用；不改变当前采集状态。\r\n" +
+                       "如需 Windows 登录后自动采集，还需勾选上方的程序自启选项。"
+            };
             _basicSettingsSaveButton = new Button
             {
                 AutoSize = true,
@@ -122,6 +154,9 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.Controls.Add(titleLabel);
             layout.Controls.Add(_autoStartCheckBox);
             layout.Controls.Add(descriptionLabel);
+            layout.Controls.Add(machineStartLabel);
+            layout.Controls.Add(_machineAutoStartList);
+            layout.Controls.Add(machineStartDescription);
             layout.Controls.Add(_basicSettingsSaveButton);
             layout.Controls.Add(_basicSettingsStatusLabel);
             tabPageBasicSettings.Controls.Add(layout);
@@ -266,7 +301,24 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private void LoadBasicSettings()
         {
-            _autoStartCheckBox.Checked = _appSettings.AutoStart;
+            bool wasReloading = _reloadingConfiguration;
+            _reloadingConfiguration = true;
+            _machineAutoStartList.BeginUpdate();
+            try
+            {
+                _autoStartCheckBox.Checked = _appSettings.AutoStart;
+                var selectedIds = new HashSet<int>(_appSettings.AutoStartMachineIds ?? new List<int>());
+                _machineAutoStartList.Items.Clear();
+                foreach (MachineConfig machine in (_machineConfigs ?? new List<MachineConfig>())
+                    .Where(machine => machine != null && machine.Id >= 1 && machine.Id <= 6)
+                    .GroupBy(machine => machine.Id).Select(group => group.First()).OrderBy(machine => machine.Id))
+                    _machineAutoStartList.Items.Add(machine, selectedIds.Contains(machine.Id));
+            }
+            finally
+            {
+                _machineAutoStartList.EndUpdate();
+                _reloadingConfiguration = wasReloading;
+            }
             _basicConfigurationHasUnsavedEdits = false;
             UpdateBasicSettingsStatus("关闭主界面后程序将继续在系统托盘运行。", Color.DimGray);
         }
@@ -283,13 +335,15 @@ namespace MachineDataAcquisitionSystem.Forms
         {
             bool previousAutoStart = _appSettings.AutoStart;
             bool requestedAutoStart = _autoStartCheckBox.Checked;
+            List<int> requestedMachineIds = _machineAutoStartList.CheckedItems.Cast<MachineConfig>()
+                .Select(machine => machine.Id).ToList();
             _basicSettingsSaveButton.Enabled = false;
             try
             {
                 _startupRegistrationService.SetEnabled(requestedAutoStart, Application.ExecutablePath);
                 try
                 {
-                    SettingsHelper.SaveBasicConfiguration(requestedAutoStart);
+                    SettingsHelper.SaveBasicConfiguration(requestedAutoStart, requestedMachineIds);
                 }
                 catch (Exception saveException)
                 {
@@ -311,14 +365,15 @@ namespace MachineDataAcquisitionSystem.Forms
                 }
 
                 _appSettings.AutoStart = requestedAutoStart;
+                _appSettings.AutoStartMachineIds = requestedMachineIds;
                 _basicConfigurationHasUnsavedEdits = false;
                 UpdateBasicSettingsStatus("基础配置保存成功。", Color.DarkGreen);
-                MessageBox.Show(this, "基础配置已保存并立即生效。", "基础配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show(this, "基础配置已保存。机台默认启动设置将在下次程序启动时生效，当前采集状态不变。",
+                    "基础配置", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
-                _autoStartCheckBox.Checked = previousAutoStart;
-                _basicConfigurationHasUnsavedEdits = false;
+                LoadBasicSettings();
                 UpdateBasicSettingsStatus("基础配置保存失败。", Color.Firebrick);
                 MessageBox.Show(this, ex.Message, "基础配置保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }

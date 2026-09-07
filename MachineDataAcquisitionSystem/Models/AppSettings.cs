@@ -31,6 +31,8 @@ namespace MachineDataAcquisitionSystem.Models
         // 高级配置
         public bool AutoStart { get; set; } = false;
         public bool AutoStartMonitor { get; set; } = false;
+        // 程序启动后自动采集的机台 ID；旧配置默认不启动任何机台。
+        public List<int> AutoStartMachineIds { get; set; } = new List<int>();
         public bool MinimizeToTray { get; set; } = false;
     }
 }

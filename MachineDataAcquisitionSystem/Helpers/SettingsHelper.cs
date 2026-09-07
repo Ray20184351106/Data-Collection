@@ -135,8 +135,14 @@ namespace MachineDataAcquisitionSystem.Helpers
         /// <summary>
         /// 只保存基础配置，避免覆盖配置窗口中其他尚未提交的编辑。
         /// </summary>
-        public static void SaveBasicConfiguration(bool autoStart)
+        public static void SaveBasicConfiguration(
+            bool autoStart,
+            System.Collections.Generic.IEnumerable<int> autoStartMachineIds = null)
         {
+            var selectedMachines = autoStartMachineIds?.Distinct().OrderBy(id => id).ToList();
+            if (selectedMachines != null && selectedMachines.Any(id => id < 1 || id > 6))
+                throw new ArgumentOutOfRangeException(nameof(autoStartMachineIds), "仅支持机台 1–6。");
+
             JObject document;
             if (File.Exists(SettingsPath))
             {
@@ -148,10 +154,17 @@ namespace MachineDataAcquisitionSystem.Helpers
             }
 
             document["AutoStart"] = autoStart;
+            // 未传入列表的旧调用保留已有选择；空列表表示取消全部勾选。
+            if (selectedMachines != null)
+                document["AutoStartMachineIds"] = new JArray(selectedMachines);
             File.WriteAllText(SettingsPath, document.ToString(Formatting.Indented));
 
             if (_settings != null)
+            {
                 _settings.AutoStart = autoStart;
+                if (selectedMachines != null)
+                    _settings.AutoStartMachineIds = selectedMachines;
+            }
         }
 
         public static void SaveSettingsOrThrow(AppSettings settings)

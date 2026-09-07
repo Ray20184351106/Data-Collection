@@ -215,6 +215,7 @@
     <Compile Include="Core\ScriptEngine.cs" />
     <Compile Include="Core\ScriptMatcher.cs" />
     <Compile Include="Core\StartupRegistrationService.cs" />
+    <Compile Include="Core\MachineAutoStartService.cs" />
     <Compile Include="Core\TrayClosePolicy.cs" />
     <Compile Include="Core\UploadCommitSignal.cs" />
     <Compile Include="Data\IDataRepository.cs" />

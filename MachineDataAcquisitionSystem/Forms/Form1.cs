@@ -26,6 +26,7 @@ namespace MachineDataAcquisitionSystem
         private List<MachineConfig> _machineConfigs;
         private RemoteAgentBridge _remoteAgentBridge;
         private PendingUploadStore _pendingUploadStore;
+        private readonly MachineAutoStartService _machineAutoStartService = new MachineAutoStartService();
 
         // 队列统计
         private int _queueLength = 0;
@@ -153,7 +154,25 @@ namespace MachineDataAcquisitionSystem
             // Agent 不可用时不影响本地采集；远程停止复用本地的取消链路。
             InitRemoteAgentBridge();
             InitializeTrayIcon();
+            Shown += StartConfiguredMachinesOnShown;
 
+        }
+
+        private void StartConfiguredMachinesOnShown(object sender, EventArgs e)
+        {
+            if (_shutdownInProgress || _shutdownCompleted) return;
+            AppSettings settings = SettingsHelper.LoadSettings();
+            if (!string.IsNullOrWhiteSpace(SettingsHelper.LastLoadError))
+            {
+                AddLog("配置读取失败，已跳过机台默认启动，请检查基础配置。", LogLevel.Error);
+                return;
+            }
+
+            _machineAutoStartService.StartOnce(
+                settings.AutoStartMachineIds,
+                _machineConfigs.Where(machine => machine != null).Select(machine => machine.Id),
+                StartMachine,
+                (machineId, error) => AddLog($"机台{machineId} 默认启动失败: {error.Message}", LogLevel.Error));
         }
 
         private void InitRemoteAgentBridge()
