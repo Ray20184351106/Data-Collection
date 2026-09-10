@@ -57,6 +57,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 NullValueHandling = NullValueHandling.Include,
                 Culture = CultureInfo.InvariantCulture
             }));
+            var root = token as JObject;
+            if (root != null && rule.CsvOptions == null)
+                root.Property(nameof(MappingRuleDefinition.CsvOptions))?.Remove();
             string json = SortToken(token).ToString(Formatting.None);
             ValidateSerializedSize(json);
             return json;
@@ -158,10 +161,10 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 throw new MappingValidationException("文件扩展名不能为空。");
             if (!normalized.StartsWith(".", StringComparison.Ordinal))
                 normalized = "." + normalized;
-            if (normalized != ".xls" && normalized != ".xlsx" &&
+            if (normalized != ".xls" && normalized != ".xlsx" && normalized != ".csv" &&
                 normalized != ".jpg" && normalized != ".jpeg" &&
                 normalized != ".png" && normalized != ".bmp")
-                throw new MappingValidationException("映射仅支持 .xls、.xlsx、.jpg、.jpeg、.png 和 .bmp。");
+                throw new MappingValidationException("映射仅支持 .xls、.xlsx、.csv、.jpg、.jpeg、.png 和 .bmp。");
             return normalized;
         }
 
@@ -188,9 +191,21 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 return;
             }
             if (rule.ImageArchive != null)
-                throw new MappingValidationException("Excel 映射不能包含图片共享目录配置。");
-            if (rule.NormalizedExtension != ".xls" && rule.NormalizedExtension != ".xlsx")
-                throw new MappingValidationException("Excel 映射仅支持 .xls 和 .xlsx。");
+                throw new MappingValidationException("表格映射不能包含图片共享目录配置。");
+            if (rule.NormalizedExtension == ".csv")
+            {
+                ValidateCsvOptions(rule.CsvOptions);
+                ValidateCsvRowConfiguration(rule, rule.CsvOptions);
+                if (!string.Equals(rule.SheetName, CsvMappingPreviewService.VirtualSheetName, StringComparison.Ordinal))
+                    throw new MappingValidationException("CSV 映射的虚拟工作表名称必须为 CSV。");
+            }
+            else
+            {
+                if (rule.NormalizedExtension != ".xls" && rule.NormalizedExtension != ".xlsx")
+                    throw new MappingValidationException("表格映射仅支持 .xls、.xlsx 和 .csv。");
+                if (rule.CsvOptions != null)
+                    throw new MappingValidationException("Excel 映射不能包含 CSV 读取选项。");
+            }
             if (string.IsNullOrWhiteSpace(rule.SheetName))
                 throw new MappingValidationException("工作表名称不能为空。");
             ValidateTextLength(rule.SheetName, 128, "工作表名称");
@@ -265,7 +280,8 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             if (rule.NormalizedExtension != ".jpg" && rule.NormalizedExtension != ".jpeg" &&
                 rule.NormalizedExtension != ".png" && rule.NormalizedExtension != ".bmp")
                 throw new MappingValidationException("图片文件名映射仅支持 .jpg、.jpeg、.png 和 .bmp。");
-            if (!string.IsNullOrWhiteSpace(rule.SheetName) || rule.RepeatedRows != null || rule.MasterDetail != null)
+            if (!string.IsNullOrWhiteSpace(rule.SheetName) || rule.RepeatedRows != null ||
+                rule.MasterDetail != null || rule.CsvOptions != null)
                 throw new MappingValidationException("图片文件名映射不能包含 Excel 工作表、重复行或主子表配置。");
             if (rule.ImageArchive == null)
                 throw new MappingValidationException("图片文件名映射缺少共享目录配置。");
@@ -290,6 +306,43 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 true,
                 rule.ImageArchive.FileName.ExpectedSegmentCount,
                 "图片");
+        }
+
+        private static void ValidateCsvOptions(CsvMappingOptions options)
+        {
+            if (options == null)
+                throw new MappingValidationException("CSV 映射缺少 CSV 读取选项。");
+
+            string encoding = (options.EncodingName ?? string.Empty).Trim().ToLowerInvariant();
+            if (encoding != "utf-8" && encoding != "utf8" &&
+                encoding != "gb18030" && encoding != "gbk")
+                throw new MappingValidationException("CSV 编码仅支持 UTF-8、GB18030 和 GBK。");
+            options.EncodingName = encoding == "utf8" ? "utf-8" : encoding;
+
+            if (string.IsNullOrEmpty(options.Delimiter) || options.Delimiter.Length != 1 ||
+                (options.Delimiter[0] != ',' && options.Delimiter[0] != ';' &&
+                 options.Delimiter[0] != '\t' && options.Delimiter[0] != '|'))
+                throw new MappingValidationException("CSV 分隔符仅支持逗号、分号、Tab 和竖线。");
+            if (options.QuoteCharacter != '"')
+                throw new MappingValidationException("CSV 引号字符必须为双引号。");
+            if (options.HeaderRowNumber <= 0 || options.HeaderRowNumber > ExcelMappingPreviewService.MaximumRows)
+                throw new MappingValidationException("CSV 表头行号超出允许范围。");
+            if (options.FirstDataRowNumber <= options.HeaderRowNumber ||
+                options.FirstDataRowNumber > ExcelMappingPreviewService.MaximumRows)
+                throw new MappingValidationException("CSV 首条数据行必须位于表头之后且不能超过行数上限。");
+        }
+
+        private static void ValidateCsvRowConfiguration(
+            MappingRuleDefinition rule,
+            CsvMappingOptions options)
+        {
+            RepeatedRowDefinition rows = rule.RecordMode == MappingRecordMode.MasterDetail &&
+                rule.MasterDetail != null && rule.MasterDetail.Detail != null
+                ? rule.MasterDetail.Detail.RepeatedRows
+                : rule.RepeatedRows;
+            if (rows != null &&
+                rows.FirstDataRowOffset != options.FirstDataRowNumber - options.HeaderRowNumber)
+                throw new MappingValidationException("CSV_ROW_CONFIGURATION_MISMATCH");
         }
 
         private static void ValidateMasterDetail(MappingRuleDefinition rule)

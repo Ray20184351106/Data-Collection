@@ -35,16 +35,37 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
         public MappingPreviewResult Preview(string filePath, MappingRuleDefinition rule)
         {
-            var result = new MappingPreviewResult();
+            return PreviewCore(filePath, filePath, rule, false);
+        }
+
+        internal MappingPreviewResult PreviewPreparedWorkbook(
+            string workbookPath,
+            string logicalSourcePath,
+            MappingRuleDefinition rule,
+            bool skipFullyBlankRows)
+        {
+            return PreviewCore(workbookPath, logicalSourcePath, rule, skipFullyBlankRows);
+        }
+
+        private MappingPreviewResult PreviewCore(
+            string workbookPath,
+            string logicalSourcePath,
+            MappingRuleDefinition rule,
+            bool skipFullyBlankRows)
+        {
+            var result = new MappingPreviewResult { SourceFormat = "Excel" };
             try
             {
                 MappingRuleSerializer.ValidateDefinition(rule);
-                ValidatePath(filePath, rule.NormalizedExtension);
+                ValidatePath(workbookPath, rule.NormalizedExtension);
 
-                using (WorkbookLease lease = OpenReadonlyCopy(filePath))
+                using (WorkbookLease lease = OpenReadonlyCopy(workbookPath))
                 {
                     result.SampleSha256 = lease.FileSha256;
-                    MappingWorkbookSnapshot snapshot = CreateSnapshot(lease.Workbook, Path.GetExtension(filePath), result.SampleSha256);
+                    MappingWorkbookSnapshot snapshot = CreateSnapshot(
+                        lease.Workbook,
+                        Path.GetExtension(workbookPath),
+                        result.SampleSha256);
                     MappingSheetSnapshot sheetSnapshot = snapshot.Sheets.FirstOrDefault(
                         item => string.Equals(item.Name, rule.SheetName, StringComparison.Ordinal));
                     if (sheetSnapshot == null)
@@ -57,12 +78,24 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     var displayCells = sheetSnapshot.Cells.ToDictionary(cell => cell.Coordinate, StringComparer.Ordinal);
                     if (rule.RecordMode == MappingRecordMode.MasterDetail)
                     {
-                        ResolveFileNameFields(filePath, rule.MasterDetail, result);
+                        ResolveFileNameFields(logicalSourcePath, rule.MasterDetail, result);
                         MappingRuleDefinition detailRule = CreateDetailPreviewRule(rule);
-                        ResolveRepeatingRows(sheet, sheetSnapshot, displayCells, detailRule, result);
+                        ResolveRepeatingRows(
+                            sheet,
+                            sheetSnapshot,
+                            displayCells,
+                            detailRule,
+                            result,
+                            skipFullyBlankRows);
                     }
                     else if (rule.RecordMode == MappingRecordMode.RepeatingRows)
-                        ResolveRepeatingRows(sheet, sheetSnapshot, displayCells, rule, result);
+                        ResolveRepeatingRows(
+                            sheet,
+                            sheetSnapshot,
+                            displayCells,
+                            rule,
+                            result,
+                            skipFullyBlankRows);
                     else
                     {
                         foreach (FieldMappingRule field in rule.Fields)
@@ -430,7 +463,8 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             MappingSheetSnapshot sheetSnapshot,
             IDictionary<string, MappingCellSnapshot> displayCells,
             MappingRuleDefinition rule,
-            MappingPreviewResult result)
+            MappingPreviewResult result,
+            bool skipFullyBlankRows)
         {
             int anchorRow;
             int anchorColumn;
@@ -487,10 +521,20 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 ICell keyCell = row == null
                     ? null
                     : row.GetCell(keyColumn, MissingCellPolicy.RETURN_BLANK_AS_NULL);
-                if (keyCell == null)
+                bool missingKey = keyCell == null ||
+                    (!IsFormulaCacheMissing(keyCell) && IsMissing(GetRawValue(keyCell)));
+                if (missingKey)
+                {
+                    bool fullyBlankRow = row == null || row.Cells.All(cell => IsMissing(GetRawValue(cell)));
+                    if (skipFullyBlankRows && fullyBlankRow && rowIndex < sheet.LastRowNum)
+                        continue;
+                    if (skipFullyBlankRows && !fullyBlankRow)
+                    {
+                        AddError(result, "MISSING_ROW_KEY");
+                        return;
+                    }
                     break;
-                if (!IsFormulaCacheMissing(keyCell) && IsMissing(GetRawValue(keyCell)))
-                    break;
+                }
 
                 var record = new MappingPreviewRecordResult
                 {

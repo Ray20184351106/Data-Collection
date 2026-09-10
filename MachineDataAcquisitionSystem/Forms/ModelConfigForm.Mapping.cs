@@ -62,6 +62,14 @@ namespace MachineDataAcquisitionSystem.Forms
         private Label _mappingImagePathFieldLabel;
         private TextBox _mappingImageRootTextBox;
         private ComboBox _mappingImagePathFieldCombo;
+        private Label _mappingCsvEncodingLabel;
+        private Label _mappingCsvDelimiterLabel;
+        private ComboBox _mappingCsvEncodingCombo;
+        private ComboBox _mappingCsvDelimiterCombo;
+        private Label _mappingCsvHeaderRowLabel;
+        private Label _mappingCsvFirstDataRowLabel;
+        private NumericUpDown _mappingCsvHeaderRowNumber;
+        private NumericUpDown _mappingCsvFirstDataRowNumber;
         private ComboBox _mappingSheetCombo;
         private TextBox _mappingRuleNameTextBox;
         private TextBox _mappingSamplePathTextBox;
@@ -84,6 +92,7 @@ namespace MachineDataAcquisitionSystem.Forms
 
         private ParseRuleStore _mappingRuleStore;
         private ExcelMappingPreviewService _mappingPreviewService;
+        private CsvMappingPreviewService _mappingCsvPreviewService;
         private LocalMappingAssistant _mappingLocalAssistant;
         private MappingWorkbookSnapshot _mappingSnapshot;
         private MappingRuleDefinition _mappingCurrentDefinition;
@@ -132,6 +141,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 BuildMappingFooter();
                 ConfigureMappingGrid();
                 WireMappingEvents();
+                UpdateSourceMappingControls();
             }
             finally
             {
@@ -245,6 +255,38 @@ namespace MachineDataAcquisitionSystem.Forms
                 Dock = DockStyle.Fill,
                 DropDownStyle = ComboBoxStyle.DropDownList
             };
+            _mappingCsvEncodingLabel = CreateMappingLabel("CSV 编码：");
+            _mappingCsvEncodingCombo = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _mappingCsvEncodingCombo.Items.AddRange(new object[] { "UTF-8", "GB18030", "GBK" });
+            _mappingCsvEncodingCombo.SelectedIndex = 0;
+            _mappingCsvDelimiterLabel = CreateMappingLabel("分隔符：");
+            _mappingCsvDelimiterCombo = new ComboBox
+            {
+                Dock = DockStyle.Fill,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            _mappingCsvDelimiterCombo.Items.AddRange(new object[] { "逗号 (,)" , "分号 (;)" , "Tab", "竖线 (|)" });
+            _mappingCsvDelimiterCombo.SelectedIndex = 0;
+            _mappingCsvHeaderRowLabel = CreateMappingLabel("表头行：");
+            _mappingCsvHeaderRowNumber = new NumericUpDown
+            {
+                Dock = DockStyle.Fill,
+                Minimum = 1,
+                Maximum = ExcelMappingPreviewService.MaximumRows,
+                Value = 1
+            };
+            _mappingCsvFirstDataRowLabel = CreateMappingLabel("首数据行：");
+            _mappingCsvFirstDataRowNumber = new NumericUpDown
+            {
+                Dock = DockStyle.Fill,
+                Minimum = 1,
+                Maximum = ExcelMappingPreviewService.MaximumRows,
+                Value = 2
+            };
             _mappingLocalAssistButton = new Button
             {
                 AutoSize = true,
@@ -337,6 +379,15 @@ namespace MachineDataAcquisitionSystem.Forms
             layout.Controls.Add(_mappingImagePathFieldCombo, 5, 5);
             layout.SetColumnSpan(_mappingImagePathFieldCombo, 3);
 
+            layout.Controls.Add(_mappingCsvEncodingLabel, 0, 5);
+            layout.Controls.Add(_mappingCsvEncodingCombo, 1, 5);
+            layout.Controls.Add(_mappingCsvDelimiterLabel, 2, 5);
+            layout.Controls.Add(_mappingCsvDelimiterCombo, 3, 5);
+            layout.Controls.Add(_mappingCsvHeaderRowLabel, 4, 5);
+            layout.Controls.Add(_mappingCsvHeaderRowNumber, 5, 5);
+            layout.Controls.Add(_mappingCsvFirstDataRowLabel, 6, 5);
+            layout.Controls.Add(_mappingCsvFirstDataRowNumber, 7, 5);
+
             layout.Controls.Add(CreateMappingLabel("适用机台："), 0, 3);
             layout.Controls.Add(_mappingMachinePanel, 1, 3);
             layout.SetColumnSpan(_mappingMachinePanel, 7);
@@ -391,7 +442,7 @@ namespace MachineDataAcquisitionSystem.Forms
             {
                 Dock = DockStyle.Fill
             };
-            var samplePage = new TabPage("Excel 样本（可框选）");
+            var samplePage = new TabPage("源文件样本（可框选）");
             var recordsPage = new TabPage("采集结果预览");
             samplePage.Controls.Add(_mappingSampleGrid);
             recordsPage.Controls.Add(_mappingRecordsGrid);
@@ -571,6 +622,10 @@ namespace MachineDataAcquisitionSystem.Forms
             _mappingModeCombo.SelectedIndexChanged += MappingModeCombo_SelectedIndexChanged;
             _mappingImageRootTextBox.TextChanged += MappingImageSetting_Changed;
             _mappingImagePathFieldCombo.SelectedIndexChanged += MappingImageSetting_Changed;
+            _mappingCsvEncodingCombo.SelectedIndexChanged += MappingCsvSetting_Changed;
+            _mappingCsvDelimiterCombo.SelectedIndexChanged += MappingCsvSetting_Changed;
+            _mappingCsvHeaderRowNumber.ValueChanged += MappingCsvSetting_Changed;
+            _mappingCsvFirstDataRowNumber.ValueChanged += MappingCsvSetting_Changed;
             _mappingRuleNameTextBox.TextChanged += MappingRuleName_TextChanged;
             _mappingBrowseButton.Click += MappingBrowseButton_Click;
             _mappingPickLocatorButton.Click += MappingPickLocatorButton_Click;
@@ -642,6 +697,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 _mappingRuleStore = new ParseRuleStore(connection.DataSource);
                 _mappingRuleStore.Initialize();
                 _mappingPreviewService = new ExcelMappingPreviewService(LoadMappingForbiddenRoots());
+                _mappingCsvPreviewService = new CsvMappingPreviewService(LoadMappingForbiddenRoots());
                 _mappingLocalAssistant = new LocalMappingAssistant();
                 RefreshMappingAiConfiguration();
                 LoadMappingModels();
@@ -1098,19 +1154,20 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingParentCidTextBox.Text = "PARENT_CID";
             _mappingImageRootTextBox.Clear();
             _mappingImagePathFieldCombo.Items.Clear();
-            UpdateImageMappingControls();
+            SelectCsvOptions(null);
+            UpdateSourceMappingControls();
             LoadMappingMachineCheckboxes();
             _mappingModelCombo.Enabled = true;
             if (_mappingModelCombo.Items.Count > 0 && _mappingModelCombo.SelectedIndex < 0)
                 _mappingModelCombo.SelectedIndex = 0;
             MappingModelChoice model = GetSelectedMappingModel();
-            _mappingRuleNameTextBox.Text = model == null ? string.Empty : model.ModelName + " Excel 映射";
+            _mappingRuleNameTextBox.Text = model == null ? string.Empty : model.ModelName + " 表格映射";
             _mappingSuppressEvents = false;
 
             PopulateMappingRows(model == null ? 0 : model.Id, null);
             AcceptMappingEditorStateAsClean();
             ClearMappingPreviewColumns();
-            SetMappingStatus("新映射：请选择只读 Excel 样本并配置字段定位", Color.DimGray);
+            SetMappingStatus("新映射：请选择只读 Excel 或 CSV 样本并配置字段定位", Color.DimGray);
             UpdateMappingCommandState();
         }
 
@@ -1188,7 +1245,8 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     _mappingImageRootTextBox.Clear();
                     _mappingImagePathFieldCombo.Items.Clear();
                 }
-                UpdateImageMappingControls();
+                SelectCsvOptions(definition.CsvOptions);
+                UpdateSourceMappingControls();
                 _mappingModelCombo.Enabled = false;
                 _mappingRuleNameTextBox.Text = definition.RuleName;
 
@@ -1412,7 +1470,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             PopulateMappingRows(model == null ? 0 : model.Id, null);
             if (model != null)
                 _mappingRuleNameTextBox.Text = model.ModelName +
-                    (GetSelectedMappingMode() == MappingRecordMode.ImageFileName ? " 图片文件名映射" : " Excel 映射");
+                    (GetSelectedMappingMode() == MappingRecordMode.ImageFileName
+                        ? " 图片文件名映射"
+                        : (IsCurrentCsvSource() ? " CSV 映射" : " Excel 映射"));
             MarkMappingDirty();
         }
 
@@ -1448,7 +1508,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             else if (mode == MappingRecordMode.RepeatingRows)
                 SetMappingStatus("重复行模式：在上方样本网格框选一行表头和首条数据，再点击“框选表格”。", Color.RoyalBlue);
             else if (mode == MappingRecordMode.MasterDetail)
-                SetMappingStatus("主子表模式：主表字段来自文件名，子表字段来自 Excel 重复行。", Color.RoyalBlue);
+                SetMappingStatus("主子表模式：主表字段来自文件名，子表字段来自表格重复行。", Color.RoyalBlue);
             else
                 SetMappingStatus("图片文件名模式：字段来自图片文件名，图片复制到共享目录后写入路径字段。", Color.RoyalBlue);
             _mappingSnapshot = null;
@@ -1457,7 +1517,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             _mappingExtensionLabel.Text = "扩展名：-";
             if (mode == MappingRecordMode.ImageFileName)
                 PopulateImagePathFieldChoices(null);
-            UpdateImageMappingControls();
+            UpdateSourceMappingControls();
             MappingModelChoice model = GetSelectedMappingModel();
             PopulateMappingRows(model == null ? 0 : model.Id, null);
             MarkMappingDirty();
@@ -1552,13 +1612,108 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             }
         }
 
-        private void UpdateImageMappingControls()
+        private void UpdateSourceMappingControls()
         {
-            bool visible = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
-            _mappingImageRootLabel.Visible = visible;
-            _mappingImageRootTextBox.Visible = visible;
-            _mappingImagePathFieldLabel.Visible = visible;
-            _mappingImagePathFieldCombo.Visible = visible;
+            bool imageVisible = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
+            _mappingImageRootLabel.Visible = imageVisible;
+            _mappingImageRootTextBox.Visible = imageVisible;
+            _mappingImagePathFieldLabel.Visible = imageVisible;
+            _mappingImagePathFieldCombo.Visible = imageVisible;
+
+            bool csvVisible = !imageVisible && IsCurrentCsvSource();
+            _mappingCsvEncodingLabel.Visible = csvVisible;
+            _mappingCsvEncodingCombo.Visible = csvVisible;
+            _mappingCsvDelimiterLabel.Visible = csvVisible;
+            _mappingCsvDelimiterCombo.Visible = csvVisible;
+            _mappingCsvHeaderRowLabel.Visible = csvVisible;
+            _mappingCsvHeaderRowNumber.Visible = csvVisible;
+            _mappingCsvFirstDataRowLabel.Visible = csvVisible;
+            _mappingCsvFirstDataRowNumber.Visible = csvVisible;
+        }
+
+        private bool IsCurrentCsvSource()
+        {
+            string extension = _mappingSnapshot == null
+                ? (_mappingCurrentDefinition == null ? null : _mappingCurrentDefinition.NormalizedExtension)
+                : _mappingSnapshot.FileExtension;
+            if (string.IsNullOrWhiteSpace(extension) &&
+                _mappingSamplePathTextBox != null &&
+                !string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
+                extension = Path.GetExtension(_mappingSamplePathTextBox.Text).ToLowerInvariant();
+            return string.Equals(extension, ".csv", StringComparison.Ordinal);
+        }
+
+        private CsvMappingOptions GetCsvOptionsFromEditor()
+        {
+            string encoding;
+            switch (_mappingCsvEncodingCombo.SelectedIndex)
+            {
+                case 1: encoding = "gb18030"; break;
+                case 2: encoding = "gbk"; break;
+                default: encoding = "utf-8"; break;
+            }
+
+            string delimiter;
+            switch (_mappingCsvDelimiterCombo.SelectedIndex)
+            {
+                case 1: delimiter = ";"; break;
+                case 2: delimiter = "\t"; break;
+                case 3: delimiter = "|"; break;
+                default: delimiter = ","; break;
+            }
+            return new CsvMappingOptions
+            {
+                EncodingName = encoding,
+                Delimiter = delimiter,
+                QuoteCharacter = '"',
+                HeaderRowNumber = Convert.ToInt32(_mappingCsvHeaderRowNumber.Value, CultureInfo.InvariantCulture),
+                FirstDataRowNumber = Convert.ToInt32(_mappingCsvFirstDataRowNumber.Value, CultureInfo.InvariantCulture),
+                SkipBlankRows = true
+            };
+        }
+
+        private void SelectCsvOptions(CsvMappingOptions options)
+        {
+            CsvMappingOptions selected = options ?? new CsvMappingOptions();
+            string encoding = (selected.EncodingName ?? string.Empty).Trim().ToLowerInvariant();
+            _mappingCsvEncodingCombo.SelectedIndex = encoding == "gb18030"
+                ? 1
+                : (encoding == "gbk" ? 2 : 0);
+            string delimiter = selected.Delimiter ?? ",";
+            _mappingCsvDelimiterCombo.SelectedIndex = delimiter == ";"
+                ? 1
+                : (delimiter == "\t" ? 2 : (delimiter == "|" ? 3 : 0));
+            _mappingCsvHeaderRowNumber.Value = Math.Max(
+                _mappingCsvHeaderRowNumber.Minimum,
+                Math.Min(_mappingCsvHeaderRowNumber.Maximum, selected.HeaderRowNumber));
+            _mappingCsvFirstDataRowNumber.Value = Math.Max(
+                _mappingCsvFirstDataRowNumber.Minimum,
+                Math.Min(_mappingCsvFirstDataRowNumber.Maximum, selected.FirstDataRowNumber));
+        }
+
+        private void MappingCsvSetting_Changed(object sender, EventArgs e)
+        {
+            if (_mappingSuppressEvents || !IsCurrentCsvSource()) return;
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text) &&
+                    File.Exists(_mappingSamplePathTextBox.Text))
+                {
+                    _mappingSnapshot = _mappingCsvPreviewService.Inspect(
+                        _mappingSamplePathTextBox.Text,
+                        GetCsvOptionsFromEditor());
+                    LoadMappingSheetChoices(CsvMappingPreviewService.VirtualSheetName);
+                    ClearMappingPreviewColumns();
+                }
+                MarkMappingDirty();
+                SetMappingStatus("CSV 读取选项已更改，请重新验证后保存。", Color.DarkOrange);
+            }
+            catch (Exception ex)
+            {
+                _mappingSnapshot = null;
+                ClearMappingPreviewColumns();
+                SetMappingStatus("CSV 样本读取失败：" + ex.Message, Color.Firebrick);
+            }
         }
 
         private MappingRecordMode GetSelectedMappingMode()
@@ -1617,7 +1772,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             }
             if (_mappingSnapshot == null || GetSelectedMappingSheet() == null)
             {
-                MessageBox.Show("请先选择 Excel 样本和工作表。", "点选定位", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("请先选择表格样本和工作表。", "点选定位", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             if (dataGridView1.CurrentRow == null)
@@ -1627,7 +1782,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             }
             if (GetMappingFieldScope(dataGridView1.CurrentRow) == MappingFieldScope.RowColumn)
             {
-                MessageBox.Show("明细列请在 Excel 样本网格中框选表头和首条数据后，点击“框选表格”统一配置。",
+                MessageBox.Show("明细列请在样本网格中框选表头和首条数据后，点击“框选表格”统一配置。",
                     "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -2221,6 +2376,10 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             AppendMappingStatePart(state, _mappingParentCidTextBox == null ? null : _mappingParentCidTextBox.Text);
             AppendMappingStatePart(state, _mappingImageRootTextBox == null ? null : _mappingImageRootTextBox.Text);
             AppendMappingStatePart(state, _mappingImagePathFieldCombo == null ? null : _mappingImagePathFieldCombo.SelectedItem);
+            AppendMappingStatePart(state, _mappingCsvEncodingCombo == null ? null : _mappingCsvEncodingCombo.SelectedItem);
+            AppendMappingStatePart(state, _mappingCsvDelimiterCombo == null ? null : _mappingCsvDelimiterCombo.SelectedItem);
+            AppendMappingStatePart(state, _mappingCsvHeaderRowNumber == null ? null : (object)_mappingCsvHeaderRowNumber.Value);
+            AppendMappingStatePart(state, _mappingCsvFirstDataRowNumber == null ? null : (object)_mappingCsvFirstDataRowNumber.Value);
             AppendMappingStatePart(state, _mappingRuleNameTextBox == null ? null : _mappingRuleNameTextBox.Text);
             AppendMappingStatePart(state, _mappingSheetCombo == null ? null : _mappingSheetCombo.SelectedItem);
             AppendMappingStatePart(state, (int)GetSelectedMappingMode());
@@ -2290,10 +2449,10 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
             bool imageMode = GetSelectedMappingMode() == MappingRecordMode.ImageFileName;
             using (var dialog = new OpenFileDialog
             {
-                Title = imageMode ? "选择用于文件名映射验证的图片样本" : "选择用于映射验证的 Excel 样本",
+                Title = imageMode ? "选择用于文件名映射验证的图片样本" : "选择用于映射验证的表格样本",
                 Filter = imageMode
                     ? "图片文件 (*.jpg;*.jpeg;*.png;*.bmp)|*.jpg;*.jpeg;*.png;*.bmp"
-                    : "Excel 工作簿 (*.xls;*.xlsx)|*.xls;*.xlsx",
+                    : "表格文件 (*.xls;*.xlsx;*.csv)|*.xls;*.xlsx;*.csv|Excel 工作簿 (*.xls;*.xlsx)|*.xls;*.xlsx|CSV 文件 (*.csv)|*.csv",
                 CheckFileExists = true,
                 Multiselect = false
             })
@@ -2302,24 +2461,42 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 try
                 {
                     CancelMappingPointSelection(false);
-                    MappingWorkbookSnapshot snapshot = imageMode
-                        ? new ImageFileMappingService().Inspect(dialog.FileName)
-                        : _mappingPreviewService.Inspect(dialog.FileName);
+                    string extension = Path.GetExtension(dialog.FileName).ToLowerInvariant();
                     if (_mappingCurrentDefinition != null &&
                         !string.Equals(
-                            snapshot.FileExtension,
+                            extension,
                             _mappingCurrentDefinition.NormalizedExtension,
                             StringComparison.Ordinal))
-                    {
                         throw new MappingValidationException(
                             "样本扩展名与当前映射定义不一致；同一映射定义不能切换文件扩展名。");
+                    if (_mappingCurrentDefinition == null &&
+                        string.Equals(extension, ".csv", StringComparison.Ordinal))
+                    {
+                        _mappingSnapshot = null;
+                        _mappingSamplePathTextBox.Text = dialog.FileName;
+                        _mappingSheetCombo.Items.Clear();
+                        UpdateSourceMappingControls();
                     }
-
+                    MappingWorkbookSnapshot snapshot = imageMode
+                        ? new ImageFileMappingService().Inspect(dialog.FileName)
+                        : (string.Equals(extension, ".csv", StringComparison.Ordinal)
+                            ? _mappingCsvPreviewService.Inspect(dialog.FileName, GetCsvOptionsFromEditor())
+                            : _mappingPreviewService.Inspect(dialog.FileName));
                     string preferredSheet = imageMode || _mappingCurrentDefinition == null
                         ? null
                         : _mappingCurrentDefinition.SheetName;
                     _mappingSnapshot = snapshot;
                     _mappingSamplePathTextBox.Text = dialog.FileName;
+                    UpdateSourceMappingControls();
+                    if (_mappingCurrentDefinition == null)
+                    {
+                        MappingModelChoice selectedModel = GetSelectedMappingModel();
+                        if (selectedModel != null)
+                            _mappingRuleNameTextBox.Text = selectedModel.ModelName +
+                                (string.Equals(snapshot.FileExtension, ".csv", StringComparison.Ordinal)
+                                    ? " CSV 映射"
+                                    : " Excel 映射");
+                    }
                     FileNameExtractionResult fileName = FileNameExtractionParser.Inspect(dialog.FileName);
                     _mappingFileNameInfoLabel.Text = string.Format(
                         CultureInfo.InvariantCulture,
@@ -2498,12 +2675,12 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
         {
             if (_mappingSnapshot == null || GetSelectedMappingSheet() == null)
             {
-                MessageBox.Show("请先选择 Excel 样本和工作表。", "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("请先选择表格样本和工作表。", "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
             if (_mappingSampleGrid.SelectedCells.Count == 0)
             {
-                MessageBox.Show("请在 Excel 样本网格中框选一行表头和紧邻的一条样例数据。",
+                MessageBox.Show("请在样本网格中框选一行表头和紧邻的一条样例数据。",
                     "框选表格", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -2822,7 +2999,10 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                 }
 
                 List<AiTargetField> targets = eligibleRows.Select(CreateAiTargetFromRow).ToList();
-                IReadOnlyList<AiMappingSuggestion> suggestions = _mappingLocalAssistant.Suggest(snapshot, targets);
+                IReadOnlyList<AiMappingSuggestion> suggestions = _mappingLocalAssistant.Suggest(
+                    snapshot,
+                    targets,
+                    IsCurrentCsvSource() ? GetCsvOptionsFromEditor() : null);
                 int applied = ApplyMappingSuggestions(suggestions, MappingConfirmationState.LocalCandidate);
                 SetMappingStatus(
                     string.Format(CultureInfo.InvariantCulture, "本地辅助已填充 {0} 项；请人工检查后再验证", applied),
@@ -3114,7 +3294,9 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     definition = BuildMappingDefinition(true);
                     preview = definition.RecordMode == MappingRecordMode.ImageFileName
                         ? new ImageFileMappingService().Preview(_mappingSamplePathTextBox.Text, definition)
-                        : _mappingPreviewService.Preview(_mappingSamplePathTextBox.Text, definition);
+                        : (string.Equals(definition.NormalizedExtension, ".csv", StringComparison.Ordinal)
+                            ? _mappingCsvPreviewService.Preview(_mappingSamplePathTextBox.Text, definition)
+                            : _mappingPreviewService.Preview(_mappingSamplePathTextBox.Text, definition));
                     DisplayMappingPreview(preview);
                     if (!preview.IsValid)
                     {
@@ -3394,6 +3576,9 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                 ModelSchemaHash = ModelSchemaService.ComputeHash(LoadMappingFields(model.Id)),
                 NormalizedExtension = extension,
                 SheetName = sheetName,
+                CsvOptions = string.Equals(extension, ".csv", StringComparison.Ordinal)
+                    ? GetCsvOptionsFromEditor()
+                    : null,
                 TemplateSignature = _mappingTemplateSignature,
                 RecordMode = GetSelectedMappingMode(),
                 RepeatedRows = GetSelectedMappingMode() == MappingRecordMode.RepeatingRows
@@ -3401,7 +3586,7 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                     : null
             };
             if (definition.RecordMode == MappingRecordMode.RepeatingRows && definition.RepeatedRows == null)
-                throw new MappingValidationException("请先在 Excel 样本网格框选表头和首条数据，并配置重复行列映射。");
+                throw new MappingValidationException("请先在样本网格框选表头和首条数据，并配置重复行列映射。");
 
             foreach (DataGridViewRow row in dataGridView1.Rows)
             {
@@ -3518,7 +3703,7 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                 string.Equals(parentCidField, "CID", StringComparison.OrdinalIgnoreCase))
                 throw new MappingValidationException("关联字段必须是非 CID 的合法标识符。");
             if (_mappingRepeatedRows == null)
-                throw new MappingValidationException("请先框选 Excel 表头和首条数据，配置子表重复行列映射。");
+                throw new MappingValidationException("请先框选表头和首条数据，配置子表重复行列映射。");
 
             int segmentCount;
             if (!string.IsNullOrWhiteSpace(_mappingSamplePathTextBox.Text))
@@ -3578,6 +3763,9 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
                 ModelSchemaHash = masterTarget.ModelSchemaHash,
                 NormalizedExtension = extension,
                 SheetName = sheetName,
+                CsvOptions = string.Equals(extension, ".csv", StringComparison.Ordinal)
+                    ? GetCsvOptionsFromEditor()
+                    : null,
                 TemplateSignature = _mappingTemplateSignature,
                 RecordMode = MappingRecordMode.MasterDetail,
                 MasterDetail = new MasterDetailMappingDefinition
@@ -3824,7 +4012,7 @@ WHERE ModelId=@ModelId AND FieldName=@FieldName;";
             _mappingRecordsGrid.Columns.Clear();
             if (preview == null || (preview.Records.Count == 0 && preview.Fields.Count == 0)) return;
 
-            _mappingRecordsGrid.Columns.Add("PreviewExcelRow", "归属 / Excel 行");
+            _mappingRecordsGrid.Columns.Add("PreviewSourceRow", "归属 / 源文件行");
             List<string> targets = preview.Fields.Keys
                 .Concat(preview.Records.SelectMany(record => record.Fields.Keys))
                 .Distinct(StringComparer.Ordinal).ToList();

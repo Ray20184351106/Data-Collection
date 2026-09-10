@@ -192,6 +192,7 @@
     <Compile Include="Core\Mapping\AiMappingResponseValidator.cs" />
     <Compile Include="Core\Mapping\AiMappingClient.cs" />
     <Compile Include="Core\Mapping\ConfigurationDeletionService.cs" />
+    <Compile Include="Core\Mapping\CsvMappingPreviewService.cs" />
     <Compile Include="Core\Mapping\ExcelMappingPreviewService.cs" />
     <Compile Include="Core\Mapping\FileNameExtractionParser.cs" />
     <Compile Include="Core\Mapping\ImageFileMappingService.cs" />
