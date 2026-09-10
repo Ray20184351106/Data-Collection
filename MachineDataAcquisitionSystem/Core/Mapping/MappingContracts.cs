@@ -23,6 +23,27 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public List<FieldMappingRule> Fields { get; set; }
         public MasterDetailMappingDefinition MasterDetail { get; set; }
         public ImageArchiveDefinition ImageArchive { get; set; }
+        public CsvMappingOptions CsvOptions { get; set; }
+    }
+
+    public sealed class CsvMappingOptions
+    {
+        public CsvMappingOptions()
+        {
+            EncodingName = "utf-8";
+            Delimiter = ",";
+            QuoteCharacter = '"';
+            HeaderRowNumber = 1;
+            FirstDataRowNumber = 2;
+            SkipBlankRows = true;
+        }
+
+        public string EncodingName { get; set; }
+        public string Delimiter { get; set; }
+        public char QuoteCharacter { get; set; }
+        public int HeaderRowNumber { get; set; }
+        public int FirstDataRowNumber { get; set; }
+        public bool SkipBlankRows { get; set; }
     }
 
     public enum MappingRecordMode
@@ -191,6 +212,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         public List<string> WarningCodes { get; set; }
         public Dictionary<string, MappingPreviewFieldResult> Fields { get; set; }
         public List<MappingPreviewRecordResult> Records { get; set; }
+        public string SourceFormat { get; set; }
     }
 
     public sealed class MappingPreviewRecordResult

@@ -20,7 +20,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             Type modelType = model.GetType();
             EnsureModelType(modelType, rule.TargetModelType);
 
-            MappingPreviewResult preview = new ExcelMappingPreviewService().Preview(filePath, rule);
+            MappingPreviewResult preview = PreviewTable(filePath, rule);
             if (!preview.IsValid)
                 throw new MappingValidationException(BuildPreviewErrorMessage(preview));
 
@@ -53,7 +53,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
 
             Type modelType = typeof(T);
             EnsureModelType(modelType, rule.TargetModelType);
-            MappingPreviewResult preview = new ExcelMappingPreviewService().Preview(filePath, rule);
+            MappingPreviewResult preview = PreviewTable(filePath, rule);
             if (!preview.IsValid)
                 throw new MappingValidationException(BuildPreviewErrorMessage(preview));
 
@@ -91,7 +91,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             if (parentCid == null || !parentCid.CanWrite || parentCidType != typeof(long))
                 throw new MappingValidationException("子模型缺少可写的 long 类型关联字段：" + definition.ParentCidField);
 
-            MappingPreviewResult preview = new ExcelMappingPreviewService().Preview(filePath, rule);
+            MappingPreviewResult preview = PreviewTable(filePath, rule);
             if (!preview.IsValid)
                 throw new MappingValidationException(BuildPreviewErrorMessage(preview));
             if (preview.Records.Count == 0)
@@ -120,6 +120,9 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
         private static string BuildPreviewErrorMessage(MappingPreviewResult preview)
         {
             var details = new List<string>();
+            string sourceName = string.Equals(preview.SourceFormat, "CSV", StringComparison.Ordinal)
+                ? "CSV"
+                : "Excel";
             foreach (MappingPreviewRecordResult record in preview.Records)
             {
                 foreach (MappingPreviewFieldResult field in record.Fields.Values.Where(
@@ -127,7 +130,7 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                 {
                     details.Add(string.Format(
                         CultureInfo.InvariantCulture,
-                        "Excel第{0}行 {1} 字段{2}: {3}",
+                        sourceName + "第{0}行 {1} 字段{2}: {3}",
                         record.ExcelRowNumber,
                         field.SourceCell ?? "?",
                         field.TargetField ?? "?",
@@ -147,6 +150,13 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
             if (details.Count == 0)
                 details.AddRange(preview.ErrorCodes);
             return "模板或映射验证失败：" + string.Join("; ", details);
+        }
+
+        private static MappingPreviewResult PreviewTable(string filePath, MappingRuleDefinition rule)
+        {
+            return string.Equals(rule.NormalizedExtension, ".csv", StringComparison.Ordinal)
+                ? new CsvMappingPreviewService().Preview(filePath, rule)
+                : new ExcelMappingPreviewService().Preview(filePath, rule);
         }
 
         private static MappingRuleDefinition DecodeRule(string encodedRule)
@@ -322,12 +332,19 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
     {
         public System.Collections.Generic.IReadOnlyList<AiMappingSuggestion> Suggest(
             MappingWorkbookSnapshot snapshot,
-            System.Collections.Generic.IEnumerable<AiTargetField> targets)
+            System.Collections.Generic.IEnumerable<AiTargetField> targets,
+            CsvMappingOptions csvOptions = null)
         {
             var suggestions = new System.Collections.Generic.List<AiMappingSuggestion>();
             if (snapshot == null) return suggestions;
 
-            var cells = snapshot.Sheets.SelectMany(sheet => sheet.Cells.Select(cell => new { sheet, cell })).ToList();
+            bool isCsv = string.Equals(snapshot.FileExtension, ".csv", StringComparison.Ordinal);
+            if (isCsv && csvOptions == null)
+                throw new MappingValidationException("CSV 本地辅助缺少 CSV 读取选项。");
+            var cells = snapshot.Sheets
+                .SelectMany(sheet => sheet.Cells.Select(cell => new { sheet, cell }))
+                .Where(item => !isCsv || GetRowNumber(item.cell.Coordinate) == csvOptions.HeaderRowNumber)
+                .ToList();
             foreach (AiTargetField target in targets ?? Enumerable.Empty<AiTargetField>())
             {
                 string[] candidates = new[] { target.FieldName, target.Description }
@@ -344,15 +361,31 @@ namespace MachineDataAcquisitionSystem.Core.Mapping
                     TargetField = target.FieldName,
                     Locator = new MappingLocator
                     {
-                        Type = "labelOffset",
+                        Type = isCsv ? "headerColumn" : "labelOffset",
                         Text = matches[0].cell.DisplayText,
-                        ColumnOffset = 1
+                        ColumnOffset = isCsv ? 0 : 1,
+                        DataRowOffset = isCsv
+                            ? csvOptions.FirstDataRowNumber - csvOptions.HeaderRowNumber
+                            : 0
                     },
                     Confidence = 1m,
                     Reason = "字段名或说明与样本标签精确匹配。"
                 });
             }
             return suggestions;
+        }
+
+        private static int GetRowNumber(string coordinate)
+        {
+            if (string.IsNullOrWhiteSpace(coordinate)) return -1;
+            try
+            {
+                return new NPOI.SS.Util.CellReference(coordinate).Row + 1;
+            }
+            catch (ArgumentException)
+            {
+                return -1;
+            }
         }
 
         private static string Normalize(string value)

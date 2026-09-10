@@ -268,6 +268,48 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
             Assert.Null(failure);
         }
 
+        [Fact]
+        public void Mapping_editor_exposes_explicit_csv_encoding_and_delimiter_settings()
+        {
+            Exception failure = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    using (var form = new ModelConfigForm())
+                    {
+                        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                        var encoding = Assert.IsType<ComboBox>(
+                            typeof(ModelConfigForm).GetField("_mappingCsvEncodingCombo", Flags).GetValue(form));
+                        var delimiter = Assert.IsType<ComboBox>(
+                            typeof(ModelConfigForm).GetField("_mappingCsvDelimiterCombo", Flags).GetValue(form));
+                        var headerRow = Assert.IsType<NumericUpDown>(
+                            typeof(ModelConfigForm).GetField("_mappingCsvHeaderRowNumber", Flags).GetValue(form));
+                        var firstDataRow = Assert.IsType<NumericUpDown>(
+                            typeof(ModelConfigForm).GetField("_mappingCsvFirstDataRowNumber", Flags).GetValue(form));
+
+                        Assert.Equal(new[] { "UTF-8", "GB18030", "GBK" },
+                            encoding.Items.Cast<object>().Select(item => item.ToString()).ToArray());
+                        Assert.Equal(new[] { "逗号 (,)", "分号 (;)", "Tab", "竖线 (|)" },
+                            delimiter.Items.Cast<object>().Select(item => item.ToString()).ToArray());
+                        Assert.Equal(1m, headerRow.Value);
+                        Assert.Equal(2m, firstDataRow.Value);
+                        Assert.Equal(2000m, headerRow.Maximum);
+                        Assert.Equal(2000m, firstDataRow.Maximum);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    failure = ex;
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            thread.Join();
+
+            Assert.Null(failure);
+        }
+
         private static Point InvokeDirection(MethodInfo method, Point pointer, Rectangle viewport)
         {
             return (Point)method.Invoke(null, new object[] { pointer, viewport, 24 });
