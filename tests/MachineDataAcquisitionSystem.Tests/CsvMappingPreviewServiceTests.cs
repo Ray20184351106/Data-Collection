@@ -11,6 +11,28 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
 {
     public sealed class CsvMappingPreviewServiceTests
     {
+        [Theory]
+        [InlineData("0.00%")]
+        [InlineData("not-a-number")]
+        [InlineData("999999999999999999999999999999999999999")]
+        public void Failed_csv_conversion_reports_actual_field_coordinate_value_and_type(string raw)
+        {
+            string path = WriteCsv("Serial,Value\r\nSN-001,1\r\nSN-002," + raw + "\r\n", new UTF8Encoding(false));
+            try
+            {
+                var rule = RepeatingRule();
+                var preview = new CsvMappingPreviewService().Preview(path, rule);
+                Assert.False(preview.IsValid);
+                string message = MappingSavePolicy.FormatValidationFailure(rule, preview);
+                foreach (string expected in new[] { "第3行", "B3", "Value", raw, "decimal", "无法转换" })
+                    Assert.Contains(expected, message);
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
         [Fact]
         public void Inspect_preserves_quoted_delimiters_escaped_quotes_and_embedded_newlines()
         {
