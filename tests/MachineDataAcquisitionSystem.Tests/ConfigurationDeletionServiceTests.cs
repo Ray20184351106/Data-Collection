@@ -9,6 +9,29 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
     public sealed class ConfigurationDeletionServiceTests
     {
         [Fact]
+        public void DeleteMappingDefinition_removes_model_snapshots_but_preserves_other_rules()
+        {
+            using (var fixture = DeletionFixture.Create())
+            using (var store = new ParseRuleStore(fixture.DatabasePath))
+            {
+                store.Initialize();
+                var draft = store.SaveDraft(fixture.NewMappingRule());
+                var validated = store.Validate(draft.Id, draft.Revision, "passed");
+                store.Publish(validated.Id, "1", validated.Revision);
+                var other = store.SaveDraft(fixture.NewMappingRule());
+                foreach (long id in new[] { draft.Id, other.Id })
+                    fixture.Execute("INSERT INTO ParseRuleVersionModels VALUES (" + id + ", 'Master', 7, 'InspectionRecord', 'hash', 'source', 'hash');");
+
+                new ConfigurationDeletionService(fixture.DatabasePath).DeleteMappingDefinition(draft.DefinitionId);
+
+                Assert.Equal(0L, fixture.ScalarLong("SELECT COUNT(*) FROM ParseRuleVersions WHERE DefinitionId=" + draft.DefinitionId));
+                Assert.Equal(0L, fixture.ScalarLong("SELECT COUNT(*) FROM PublishedParseRuleBindings;"));
+                Assert.Equal(1L, fixture.ScalarLong("SELECT COUNT(*) FROM ParseRuleVersionModels;"));
+                Assert.Equal(1L, fixture.ScalarLong("SELECT COUNT(*) FROM ParseRuleVersions WHERE Id=" + other.Id));
+            }
+        }
+
+        [Fact]
         public void DeleteMappingDefinition_removes_an_unpublished_definition_and_all_its_versions()
         {
             using (var fixture = DeletionFixture.Create())

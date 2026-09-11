@@ -6,6 +6,56 @@ namespace MachineDataAcquisitionSystem.Tests.Mapping
 {
     public sealed class MappingSavePolicyTests
     {
+        [Fact]
+        public void Summary_keeps_non_field_errors_and_limits_large_error_lists()
+        {
+            var rule = new MappingRuleDefinition();
+            var preview = new MappingPreviewResult();
+            preview.ErrorCodes.Add("CSV_ENCODING_INVALID");
+            Assert.Contains("CSV_ENCODING_INVALID", MappingSavePolicy.FormatValidationFailure(rule, preview));
+            rule.Fields.Add(new FieldMappingRule { TargetField = "Count", TargetType = "int", Transforms = { "integer" }, DefaultValue = "invalid" });
+            for (int row = 2; row <= 11; row++)
+            {
+                var record = new MappingPreviewRecordResult { ExcelRowNumber = row };
+                record.Fields["Count"] = new MappingPreviewFieldResult { TargetField = "Count", SourceCell = "A" + row, RawValue = "bad\nvalue", ErrorCode = "CONVERSION_FAILED" };
+                preview.Records.Add(record);
+            }
+            string message = MappingSavePolicy.FormatValidationFailure(rule, preview);
+            Assert.Contains("另有 2 项错误", message);
+            Assert.Contains("bad\\nvalue", message);
+            Assert.Contains("转换步骤：integer", message);
+            Assert.Contains("默认值：“invalid”", message);
+            Assert.DoesNotContain("第10行", message);
+        }
+
+        [Fact]
+        public void Conversion_error_summary_identifies_detail_field_row_value_and_type()
+        {
+            var rule = new MappingRuleDefinition
+            {
+                RecordMode = MappingRecordMode.MasterDetail,
+                MasterDetail = new MasterDetailMappingDefinition
+                {
+                    Master = new MappingTargetDefinition(),
+                    Detail = new MappingTargetDefinition
+                    {
+                        Fields = { new FieldMappingRule { TargetField = "Yield", TargetType = "decimal", TargetDescription = "良品率" } }
+                    }
+                }
+            };
+            var preview = new MappingPreviewResult();
+            preview.ErrorCodes.Add("CONVERSION_FAILED");
+            var record = new MappingPreviewRecordResult { ExcelRowNumber = 3 };
+            record.Fields["Yield"] = new MappingPreviewFieldResult
+            {
+                TargetField = "Yield", SourceCell = "H3", RawValue = "0.00%", ErrorCode = "CONVERSION_FAILED"
+            };
+            preview.Records.Add(record);
+            string message = MappingSavePolicy.FormatValidationFailure(rule, preview);
+            foreach (string expected in new[] { "子表", "第3行", "H3", "Yield", "良品率", "0.00%", "decimal", "无法转换" })
+                Assert.Contains(expected, message);
+        }
+
         [Theory]
         [InlineData(ParseRuleStatus.Validated)]
         [InlineData(ParseRuleStatus.Published)]

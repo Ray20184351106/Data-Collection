@@ -3301,7 +3301,7 @@ INNER JOIN ParseRuleDefinitions d ON d.Id = v.DefinitionId
                     if (!preview.IsValid)
                     {
                         throw new MappingValidationException(
-                            "样本自动验证未通过：" + string.Join(", ", preview.ErrorCodes));
+                            MappingSavePolicy.FormatValidationFailure(definition, preview));
                     }
 
                     definition.TemplateSignature = preview.TemplateSignature;

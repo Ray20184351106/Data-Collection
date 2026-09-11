@@ -131,6 +131,11 @@ WHERE ParseRuleVersionId IN (
 
         private static void DeleteDefinitionRows(SQLiteConnection connection, SQLiteTransaction transaction, long definitionId)
         {
+            Execute(connection, transaction, @"
+DELETE FROM ParseRuleVersionModels
+WHERE ParseRuleVersionId IN (
+    SELECT Id FROM ParseRuleVersions WHERE DefinitionId=@Id
+);", definitionId);
             Execute(connection, transaction, "DELETE FROM ParseRuleVersions WHERE DefinitionId=@Id;", definitionId);
             if (Execute(connection, transaction, "DELETE FROM ParseRuleDefinitions WHERE Id=@Id;", definitionId) != 1)
                 throw new ConfigurationDeletionBlockedException("规则删除失败，请刷新后重试。");
