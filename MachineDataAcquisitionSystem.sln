@@ -23,6 +23,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Agent.Setup.Tes
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MachineDataAcquisitionSystem.Tests", "tests\MachineDataAcquisitionSystem.Tests\MachineDataAcquisitionSystem.Tests.csproj", "{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Updater", "Acquisition.Updater\Acquisition.Updater.csproj", "{CD259A34-84E0-4FCB-AF32-E83469C9793C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Acquisition.Updater.Tests", "tests\Acquisition.Updater.Tests\Acquisition.Updater.Tests.csproj", "{D8BB8866-9BA1-4681-8DB3-A575821D08BF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +73,14 @@ Global
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B7A9E1F0-27B4-4F4A-9AA4-28FA6A87DA11}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CD259A34-84E0-4FCB-AF32-E83469C9793C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CD259A34-84E0-4FCB-AF32-E83469C9793C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CD259A34-84E0-4FCB-AF32-E83469C9793C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CD259A34-84E0-4FCB-AF32-E83469C9793C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D8BB8866-9BA1-4681-8DB3-A575821D08BF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D8BB8866-9BA1-4681-8DB3-A575821D08BF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D8BB8866-9BA1-4681-8DB3-A575821D08BF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D8BB8866-9BA1-4681-8DB3-A575821D08BF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
