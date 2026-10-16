@@ -1,5 +1,6 @@
 ﻿using MachineDataAcquisitionSystem.Helpers;
 using MachineDataAcquisitionSystem.Core.Mapping;
+using MachineDataAcquisitionSystem.Core;
 using MachineDataAcquisitionSystem.Forms;
 using System;
 using System.Collections.Generic;
@@ -62,7 +63,13 @@ namespace MachineDataAcquisitionSystem
                     MessageBoxIcon.Error);
                 return;
             }
-            Application.Run(new Form1());
+            using (var mainForm = new Form1())
+            {
+                Application.Run(mainForm);
+                if (mainForm.RestartRequested)
+                    System.Diagnostics.Process.Start(ApplicationLaunchService.CreateRestartStartInfo(
+                        Application.ExecutablePath, System.Diagnostics.Process.GetCurrentProcess().Id));
+            }
         }
     }
 }

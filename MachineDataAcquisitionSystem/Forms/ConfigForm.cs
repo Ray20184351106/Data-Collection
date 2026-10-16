@@ -17,6 +17,7 @@ namespace MachineDataAcquisitionSystem.Forms
 {
     public partial class ConfigForm : Form
     {
+        public event EventHandler RestartRequested;
         // ========== 路径配置 ==========
         private List<MachineConfig> _machineConfigs;
         private AppSettings _appSettings;
@@ -340,7 +341,7 @@ namespace MachineDataAcquisitionSystem.Forms
             _basicSettingsSaveButton.Enabled = false;
             try
             {
-                _startupRegistrationService.SetEnabled(requestedAutoStart, Application.ExecutablePath);
+                _startupRegistrationService.SetEnabled(requestedAutoStart, ApplicationLaunchService.GetStartupExecutablePath(Application.ExecutablePath));
                 try
                 {
                     SettingsHelper.SaveBasicConfiguration(requestedAutoStart, requestedMachineIds);
@@ -349,7 +350,7 @@ namespace MachineDataAcquisitionSystem.Forms
                 {
                     try
                     {
-                        _startupRegistrationService.SetEnabled(previousAutoStart, Application.ExecutablePath);
+                        _startupRegistrationService.SetEnabled(previousAutoStart, ApplicationLaunchService.GetStartupExecutablePath(Application.ExecutablePath));
                     }
                     catch (Exception rollbackException)
                     {
@@ -613,8 +614,8 @@ namespace MachineDataAcquisitionSystem.Forms
 
             if (result == DialogResult.Yes)
             {
-                System.Diagnostics.Process.Start(Application.ExecutablePath);
-                System.Environment.Exit(0);
+                this.Close();
+                RestartRequested?.Invoke(this, EventArgs.Empty);
             }
             else
             {

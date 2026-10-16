@@ -27,6 +27,7 @@ namespace MachineDataAcquisitionSystem
         private RemoteAgentBridge _remoteAgentBridge;
         private PendingUploadStore _pendingUploadStore;
         private readonly MachineAutoStartService _machineAutoStartService = new MachineAutoStartService();
+        private readonly ApplicationReleaseService _releaseService;
 
         // 队列统计
         private int _queueLength = 0;
@@ -60,6 +61,7 @@ namespace MachineDataAcquisitionSystem
         private bool _shutdownInProgress;
         private bool _shutdownCompleted;
         private bool _exitRequested;
+        internal bool RestartRequested { get; private set; }
         private NotifyIcon _trayIcon;
         private ContextMenuStrip _trayContextMenu;
         private FileParser _fileParser = new FileParser();
@@ -106,6 +108,18 @@ namespace MachineDataAcquisitionSystem
         public Form1()
         {
             InitializeComponent();
+            _releaseService = new ApplicationReleaseService(AppDomain.CurrentDomain.BaseDirectory);
+            Text = "产线数据采集系统 v" + _releaseService.CurrentVersion;
+            var updateHistoryButton = new ToolStripButton
+            {
+                Name = "updateHistoryButton",
+                Text = "更新日志",
+                AutoSize = false,
+                Size = new Size(80, 30),
+                DisplayStyle = ToolStripItemDisplayStyle.Text
+            };
+            updateHistoryButton.Click += (sender, args) => new UpdateHistoryForm(_releaseService).Show(this);
+            toolStrip1.Items.Add(updateHistoryButton);
             // 设置窗体启动位置为屏幕中央
             this.StartPosition = FormStartPosition.CenterScreen;
 
@@ -155,6 +169,7 @@ namespace MachineDataAcquisitionSystem
             InitRemoteAgentBridge();
             InitializeTrayIcon();
             Shown += StartConfiguredMachinesOnShown;
+            Shown += (sender, args) => BeginInvoke(new Action(() => UpdateHistoryForm.ShowUpdateNotice(this, _releaseService)));
 
         }
 
@@ -2127,7 +2142,7 @@ VALUES
 
             txtHelp.Text =
                 "═════════════════════════════════════════\n" +
-                "                    文件数据采集系统 v1.0                    \n" +
+                "                    文件数据采集系统 v" + _releaseService.CurrentVersion + "                    \n" +
                 "═════════════════════════════════════════\n\n" +
                 "【使用说明】\n" +
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n" +
@@ -2701,6 +2716,11 @@ VALUES
         private void toolStripButton4_Click(object sender, EventArgs e)
         {
             var configForm = new ConfigForm();
+            configForm.RestartRequested += (configSender, args) =>
+            {
+                RestartRequested = true;
+                RequestApplicationExit();
+            };
             configForm.Show();
         }
         /// <summary>

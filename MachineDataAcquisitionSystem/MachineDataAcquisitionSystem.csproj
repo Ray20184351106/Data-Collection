@@ -219,6 +219,8 @@
     <Compile Include="Core\ScriptEngine.cs" />
     <Compile Include="Core\ScriptMatcher.cs" />
     <Compile Include="Core\StartupRegistrationService.cs" />
+    <Compile Include="Core\ApplicationLaunchService.cs" />
+    <Compile Include="Core\ApplicationReleaseService.cs" />
     <Compile Include="Core\MachineAutoStartService.cs" />
     <Compile Include="Core\TrayClosePolicy.cs" />
     <Compile Include="Core\UploadCommitSignal.cs" />
@@ -243,6 +245,9 @@
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
     <Compile Include="Forms\LogViewerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\UpdateHistoryForm.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Forms\LogViewerForm.Designer.cs">
@@ -331,6 +336,11 @@
     <Folder Include="Services\" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\CHANGELOG.md">
+      <Link>Resources\CHANGELOG.md</Link>
+      <TargetPath>Resources\CHANGELOG.md</TargetPath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="Resources\Images\Logo.ico" />
     <Content Include="Resources\Images\停止.png" />
     <Content Include="Resources\Images\帮助.png" />
